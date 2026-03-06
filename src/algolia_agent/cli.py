@@ -471,7 +471,10 @@ def _select(message: str, choices: list) -> str:
 def _ask(prompt: str, default: str = "") -> str:
     """Prompt the user for input, showing default in brackets."""
     display = f"{prompt} [{default}]: " if default else f"{prompt}: "
-    val = input(display).strip()
+    try:
+        val = input(display).strip()
+    except KeyboardInterrupt:
+        raise SystemExit("\nAborted.")
     return val or default
 
 
@@ -723,6 +726,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main():
+    try:
+        _main()
+    except KeyboardInterrupt:
+        print("\nAborted.", file=sys.stderr)
+        sys.exit(130)
+
+
+def _main():
     parser = build_parser()
     args = parser.parse_args()
 
