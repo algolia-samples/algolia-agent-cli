@@ -285,11 +285,11 @@ def test_init_writes_config_and_prompt(tmp_path, monkeypatch):
     from algolia_agent.cli import cmd_init
 
     providers = [{"id": "uuid", "name": "hackathon-gemini", "defaultModel": "gemini-2.5-flash"}]
-    # _select: provider, index. input: model (text fallback), name, instructions, description, replica
-    inputs = iter(["gemini-2.5-flash", "My Agent", "PROMPT.md", "Main product catalog.", "N"])
+    # _select: provider, index, replica(done). input: model (text fallback), name, instructions, description
+    inputs = iter(["gemini-2.5-flash", "My Agent", "PROMPT.md", "Main product catalog."])
     monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
     with _mock_init_client(providers):
-        with _mock_select(["hackathon-gemini", "products"]):
+        with _mock_select(["hackathon-gemini", "products", "<done — no more replicas>"]):
             with patch("builtins.input", lambda _: next(inputs)):
                 cmd_init(build_parser().parse_args(["init", "--output-dir", str(tmp_path)]))
 
@@ -309,11 +309,11 @@ def test_init_with_replicas(tmp_path, monkeypatch):
     inputs = iter([
         "gemini-2.5-flash", "My Agent", "PROMPT.md",
         "Product catalog.",
-        "y", "products_{{event_id}}_price_asc", "Sorted by price asc.", "N",
+        "products_{{event_id}}_price_asc", "Sorted by price asc.",
     ])
     monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
     with _mock_init_client(providers):
-        with _mock_select(["hackathon-gemini", "products_{{event_id}}"]):
+        with _mock_select(["hackathon-gemini", "products_{{event_id}}", "<custom name>", "<done — no more replicas>"]):
             with patch("builtins.input", lambda _: next(inputs)):
                 cmd_init(build_parser().parse_args(["init", "--output-dir", str(tmp_path)]))
 
@@ -327,8 +327,8 @@ def test_init_prompts_for_missing_credentials(tmp_path, monkeypatch):
     from algolia_agent.cli import cmd_init
 
     providers = [{"id": "uuid", "name": "hackathon-gemini", "defaultModel": "gemini-2.5-flash"}]
-    # input: app_id, save_to_env, model (text), name, instructions, description, replica
-    inputs = iter(["MYAPPID", "n", "gemini-2.5-flash", "My Agent", "PROMPT.md", "Product catalog.", "N"])
+    # input: app_id, save_to_env, model (text), name, instructions, description
+    inputs = iter(["MYAPPID", "n", "gemini-2.5-flash", "My Agent", "PROMPT.md", "Product catalog."])
     monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
     monkeypatch.delenv("ALGOLIA_APP_ID", raising=False)
     monkeypatch.delenv("ALGOLIA_API_KEY", raising=False)
@@ -341,7 +341,7 @@ def test_init_prompts_for_missing_credentials(tmp_path, monkeypatch):
         with patch("algolia_agent.cli.Path.cwd", return_value=MagicMock(
             __truediv__=lambda self, other: MagicMock(exists=lambda: False)
         )):
-            with _mock_select(["hackathon-gemini", "products"]):
+            with _mock_select(["hackathon-gemini", "products", "<done — no more replicas>"]):
                 with patch("builtins.input", lambda _: next(inputs)):
                     with patch("algolia_agent.cli.getpass.getpass", return_value="myapikey"):
                         cmd_init(build_parser().parse_args(["init", "--output-dir", str(tmp_path)]))
@@ -354,7 +354,7 @@ def test_init_saves_credentials_to_dotenv(tmp_path, monkeypatch):
     from algolia_agent.cli import cmd_init
 
     providers = [{"id": "uuid", "name": "hackathon-gemini", "defaultModel": "gemini-2.5-flash"}]
-    inputs = iter(["MYAPPID", "Y", "gemini-2.5-flash", "My Agent", "PROMPT.md", "Product catalog.", "N"])
+    inputs = iter(["MYAPPID", "Y", "gemini-2.5-flash", "My Agent", "PROMPT.md", "Product catalog."])
     monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
     monkeypatch.delenv("ALGOLIA_APP_ID", raising=False)
     monkeypatch.delenv("ALGOLIA_API_KEY", raising=False)
@@ -365,7 +365,7 @@ def test_init_saves_credentials_to_dotenv(tmp_path, monkeypatch):
     mock_client.list_provider_models.return_value = []
     mock_client.list_indices.return_value = []
     with patch("algolia_agent.cli.AlgoliaAgentClient", side_effect=[ValueError("Missing credentials"), mock_client]):
-        with _mock_select(["hackathon-gemini", "products"]):
+        with _mock_select(["hackathon-gemini", "products", "<done — no more replicas>"]):
             with patch("builtins.input", lambda _: next(inputs)):
                 with patch("algolia_agent.cli.getpass.getpass", return_value="myapikey"):
                     cmd_init(build_parser().parse_args(["init", "--output-dir", str(tmp_path)]))
@@ -380,14 +380,14 @@ def test_init_model_selector(tmp_path, monkeypatch):
     from algolia_agent.cli import cmd_init
 
     providers = [{"id": "provider-uuid", "name": "hackathon-gemini"}]
-    inputs = iter(["My Agent", "PROMPT.md", "Main product catalog.", "N"])
+    inputs = iter(["My Agent", "PROMPT.md", "Main product catalog."])
     monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
     mock_client = MagicMock()
     mock_client.list_providers.return_value = providers
     mock_client.list_provider_models.return_value = ["gemini-2.5-flash", "gemini-2.0-flash"]
     mock_client.list_indices.return_value = []
     with patch("algolia_agent.cli.AlgoliaAgentClient", return_value=mock_client):
-        with _mock_select(["hackathon-gemini", "gemini-2.0-flash", "products"]):
+        with _mock_select(["hackathon-gemini", "gemini-2.0-flash", "products", "<done — no more replicas>"]):
             with patch("builtins.input", lambda _: next(inputs)):
                 cmd_init(build_parser().parse_args(["init", "--output-dir", str(tmp_path)]))
 
@@ -401,14 +401,14 @@ def test_init_index_selector_existing(tmp_path, monkeypatch):
     from algolia_agent.cli import cmd_init
 
     providers = [{"id": "provider-uuid", "name": "hackathon-gemini"}]
-    inputs = iter(["My Agent", "PROMPT.md", "Product catalog.", "N"])
+    inputs = iter(["My Agent", "PROMPT.md", "Product catalog."])
     monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
     mock_client = MagicMock()
     mock_client.list_providers.return_value = providers
     mock_client.list_provider_models.return_value = ["gemini-2.5-flash", "gemini-2.0-flash"]
     mock_client.list_indices.return_value = ["products_a", "products_b"]
     with patch("algolia_agent.cli.AlgoliaAgentClient", return_value=mock_client):
-        with _mock_select(["hackathon-gemini", "gemini-2.5-flash", "products_b"]):
+        with _mock_select(["hackathon-gemini", "gemini-2.5-flash", "products_b", "<done — no more replicas>"]):
             with patch("builtins.input", lambda _: next(inputs)):
                 cmd_init(build_parser().parse_args(["init", "--output-dir", str(tmp_path)]))
 
@@ -421,14 +421,14 @@ def test_init_index_selector_custom(tmp_path, monkeypatch):
     from algolia_agent.cli import cmd_init
 
     providers = [{"id": "provider-uuid", "name": "hackathon-gemini"}]
-    inputs = iter(["My Agent", "PROMPT.md", "Product catalog.", "N"])
+    inputs = iter(["My Agent", "PROMPT.md", "Product catalog."])
     monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
     mock_client = MagicMock()
     mock_client.list_providers.return_value = providers
     mock_client.list_provider_models.return_value = ["gemini-2.5-flash", "gemini-2.0-flash"]
     mock_client.list_indices.return_value = ["products_a", "products_b"]
     with patch("algolia_agent.cli.AlgoliaAgentClient", return_value=mock_client):
-        with _mock_select(["hackathon-gemini", "gemini-2.5-flash", "products_{{event_id}}"]):
+        with _mock_select(["hackathon-gemini", "gemini-2.5-flash", "products_{{event_id}}", "<done — no more replicas>"]):
             with patch("builtins.input", lambda _: next(inputs)):
                 cmd_init(build_parser().parse_args(["init", "--output-dir", str(tmp_path)]))
 
@@ -485,14 +485,14 @@ def test_init_model_selector_fallback_on_error(tmp_path, monkeypatch):
     from algolia_agent.client import AgentAPIError
 
     providers = [{"id": "provider-uuid", "name": "hackathon-gemini", "defaultModel": "gemini-2.5-flash"}]
-    inputs = iter(["gemini-2.5-flash", "My Agent", "PROMPT.md", "Product catalog.", "N"])
+    inputs = iter(["gemini-2.5-flash", "My Agent", "PROMPT.md", "Product catalog."])
     monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
     mock_client = MagicMock()
     mock_client.list_providers.return_value = providers
     mock_client.list_provider_models.side_effect = AgentAPIError(500, "server error")
     mock_client.list_indices.return_value = []
     with patch("algolia_agent.cli.AlgoliaAgentClient", return_value=mock_client):
-        with _mock_select(["hackathon-gemini", "products"]):
+        with _mock_select(["hackathon-gemini", "products", "<done — no more replicas>"]):
             with patch("builtins.input", lambda _: next(inputs)):
                 cmd_init(build_parser().parse_args(["init", "--output-dir", str(tmp_path)]))
 

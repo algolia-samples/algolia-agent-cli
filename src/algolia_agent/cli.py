@@ -576,16 +576,26 @@ def cmd_init(args: argparse.Namespace):
             "Primary index description (use {{vars}} for dynamic values)",
             f"Search index for {index}.",
         )
+        _DONE = "<done — no more replicas>"
+        _CUSTOM_REPLICA = "<custom name>"
         replicas = []
+        selected_replica_indices: set[str] = set()
         while True:
             print()
-            add = _ask("Add a replica index?", "N")
-            if add.lower() != "y":
+            available = [i for i in indices if i != index and i not in selected_replica_indices]
+            selection = _select(
+                "Add a replica index:",
+                [_DONE] + available + [_CUSTOM_REPLICA],
+            )
+            if selection == _DONE:
                 break
-            replica_index = _ask("  Replica index name")
-            if not replica_index:
-                print("  Skipped (no name given).")
-                continue
+            if selection == _CUSTOM_REPLICA:
+                replica_index = _ask("  Replica index name")
+                if not replica_index:
+                    continue
+            else:
+                replica_index = selection
+                selected_replica_indices.add(replica_index)
             replica_desc = _ask("  Replica description", replica_index)
             replicas.append({"index": replica_index, "description": replica_desc})
     else:
