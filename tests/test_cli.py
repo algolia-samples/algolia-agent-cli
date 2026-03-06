@@ -436,6 +436,53 @@ def test_init_index_selector_custom(tmp_path, monkeypatch):
     assert config["index"] == "products_{{event_id}}"
 
 
+def test_init_no_index_from_picker(tmp_path, monkeypatch):
+    """Choosing <no index> from the index picker creates an agent config without tools."""
+    from algolia_agent.cli import cmd_init
+
+    providers = [{"id": "provider-uuid", "name": "hackathon-gemini"}]
+    inputs = iter(["My Agent", "PROMPT.md"])
+    monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
+    mock_client = MagicMock()
+    mock_client.list_providers.return_value = providers
+    mock_client.list_provider_models.return_value = ["gemini-2.5-flash"]
+    mock_client.list_indices.return_value = ["products_a", "products_b"]
+    with patch("algolia_agent.cli.AlgoliaAgentClient", return_value=mock_client):
+        with _mock_pick([
+            ("hackathon-gemini", 0),
+            ("gemini-2.5-flash", 0),
+            ("<no index — create without tools>", 3),
+        ]):
+            with patch("builtins.input", lambda _: next(inputs)):
+                cmd_init(build_parser().parse_args(["init", "--output-dir", str(tmp_path)]))
+
+    config = json.loads((tmp_path / "agent-config.json").read_text())
+    assert "index" not in config
+    assert "index_description" not in config
+    assert "replicas" not in config
+
+
+def test_init_no_index_text_fallback(tmp_path, monkeypatch):
+    """Leaving index blank when no indices exist creates an agent config without tools."""
+    from algolia_agent.cli import cmd_init
+
+    providers = [{"id": "provider-uuid", "name": "hackathon-gemini"}]
+    inputs = iter(["My Agent", "PROMPT.md", ""])  # blank for index
+    monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
+    mock_client = MagicMock()
+    mock_client.list_providers.return_value = providers
+    mock_client.list_provider_models.return_value = ["gemini-2.5-flash"]
+    mock_client.list_indices.return_value = []
+    with patch("algolia_agent.cli.AlgoliaAgentClient", return_value=mock_client):
+        with _mock_pick([("hackathon-gemini", 0), ("gemini-2.5-flash", 0)]):
+            with patch("builtins.input", lambda _: next(inputs)):
+                cmd_init(build_parser().parse_args(["init", "--output-dir", str(tmp_path)]))
+
+    config = json.loads((tmp_path / "agent-config.json").read_text())
+    assert "index" not in config
+    assert "index_description" not in config
+
+
 def test_init_model_selector_fallback_on_error(tmp_path, monkeypatch):
     """When list_provider_models raises AgentAPIError, init falls back to free-text input."""
     from algolia_agent.cli import cmd_init
