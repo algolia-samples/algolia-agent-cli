@@ -7,6 +7,8 @@ Credential resolution order:
   3. .env file in the current working directory
 """
 
+from __future__ import annotations
+
 import json
 import os
 import time

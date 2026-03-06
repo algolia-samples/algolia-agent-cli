@@ -12,6 +12,8 @@ Commands:
   delete <agent_id>       Delete an agent
 """
 
+from __future__ import annotations
+
 import argparse
 import getpass
 import json
