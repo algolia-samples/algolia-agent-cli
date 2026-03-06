@@ -2,8 +2,6 @@
 
 A minimal CLI for the [Algolia Agent Studio](https://www.algolia.com/doc/guides/algolia-ai/agent-studio/) REST API.
 
-Zero dependencies — uses only Python stdlib.
-
 ## Install
 
 ```bash
@@ -238,6 +236,6 @@ card vending machine agent with per-event index names and template variables.
 ## Running tests
 
 ```bash
-pip install pytest
+pip install pytest pick
 pytest tests/ -v
 ```

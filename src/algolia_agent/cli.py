@@ -18,6 +18,8 @@ import json
 import sys
 from pathlib import Path
 
+from pick import pick
+
 from .client import AgentAPIError, AlgoliaAgentClient
 from .template import extract_variables, render
 
@@ -458,14 +460,6 @@ def _ask(prompt: str, default: str = "") -> str:
     return val or default
 
 
-def _ask_int(prompt: str, choices: list) -> int:
-    """Prompt for a numbered choice; re-prompts on invalid input."""
-    while True:
-        raw = input(f"{prompt}: ").strip()
-        if raw.isdigit() and 1 <= int(raw) <= len(choices):
-            return int(raw) - 1
-        print(f"  Enter a number between 1 and {len(choices)}.")
-
 
 def _resolve_credentials_interactively(args: argparse.Namespace) -> AlgoliaAgentClient:
     """Try to build a client from existing credentials; prompt and optionally
@@ -533,10 +527,7 @@ def cmd_init(args: argparse.Namespace):
     if not providers:
         raise SystemExit("ERROR: No providers found. Check your credentials.")
 
-    print()
-    for i, p in enumerate(providers, 1):
-        print(f"  [{i}] {p['name']}")
-    provider_idx = _ask_int("\nProvider", providers)
+    _, provider_idx = pick([p["name"] for p in providers], "Select a provider:")
     provider = providers[provider_idx]
 
     models = []
@@ -546,11 +537,7 @@ def cmd_init(args: argparse.Namespace):
         pass  # fall through to free-text input
 
     if models:
-        print()
-        for i, m in enumerate(models, 1):
-            print(f"  [{i}] {m}")
-        model_idx = _ask_int("\nModel", models)
-        model = models[model_idx]
+        model, _ = pick(models, "Select a model:")
     else:
         model = _ask("Model", provider.get("defaultModel") or "")
         if not model:
@@ -563,13 +550,9 @@ def cmd_init(args: argparse.Namespace):
     _CUSTOM = "<custom name>"
     indices = client.list_indices()
     if indices:
-        print()
-        for i, idx in enumerate(indices, 1):
-            print(f"  [{i}] {idx}")
-        print(f"  [{len(indices) + 1}] {_CUSTOM}")
-        choice = _ask_int("\nPrimary index", indices + [_CUSTOM])
-        if choice < len(indices):
-            index = indices[choice]
+        selection, sel_idx = pick(indices + [_CUSTOM], "Select a primary index:")
+        if sel_idx < len(indices):
+            index = selection
         else:
             index = _ask("  Index name (use {{vars}} for dynamic values)")
             if not index:
