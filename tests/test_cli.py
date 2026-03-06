@@ -273,7 +273,6 @@ def test_init_prompts_for_missing_credentials(tmp_path, monkeypatch):
     providers = [{"id": "uuid", "name": "hackathon-gemini", "defaultModel": "gemini-2.5-flash"}]
     inputs = iter([
         "MYAPPID",        # App ID prompt
-        "myapikey",       # API Key prompt
         "n",              # don't save to .env
         "1",              # provider
         "gemini-2.5-flash",
@@ -298,9 +297,10 @@ def test_init_prompts_for_missing_credentials(tmp_path, monkeypatch):
             __truediv__=lambda self, other: MagicMock(exists=lambda: False)
         )):
             with patch("builtins.input", lambda _: next(inputs)):
-                parser = build_parser()
-                args = parser.parse_args(["init", "--output-dir", str(tmp_path)])
-                cmd_init(args)
+                with patch("algolia_agent.cli.getpass.getpass", return_value="myapikey"):
+                    parser = build_parser()
+                    args = parser.parse_args(["init", "--output-dir", str(tmp_path)])
+                    cmd_init(args)
 
     config = json.loads((tmp_path / "agent-config.json").read_text())
     assert config["provider"] == "hackathon-gemini"
@@ -311,7 +311,7 @@ def test_init_saves_credentials_to_dotenv(tmp_path, monkeypatch):
 
     providers = [{"id": "uuid", "name": "hackathon-gemini", "defaultModel": "gemini-2.5-flash"}]
     inputs = iter([
-        "MYAPPID", "myapikey", "Y",  # creds + save to .env
+        "MYAPPID", "Y",  # App ID + save to .env (API key via getpass)
         "1", "gemini-2.5-flash", "My Agent", "PROMPT.md", "products", "Product catalog.", "N",
     ])
     monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
@@ -326,8 +326,9 @@ def test_init_saves_credentials_to_dotenv(tmp_path, monkeypatch):
         mock_client,
     ]):
         with patch("builtins.input", lambda _: next(inputs)):
-            args = build_parser().parse_args(["init", "--output-dir", str(tmp_path)])
-            cmd_init(args)
+            with patch("algolia_agent.cli.getpass.getpass", return_value="myapikey"):
+                args = build_parser().parse_args(["init", "--output-dir", str(tmp_path)])
+                cmd_init(args)
 
     env_content = (tmp_path / ".env").read_text()
     assert "ALGOLIA_APP_ID=MYAPPID" in env_content

@@ -40,7 +40,7 @@ algolia-agent publish <agent_id>       # Publish a draft agent
 algolia-agent delete <agent_id> --confirm
 ```
 
-Add `--json` to any command for machine-readable output.
+Add `--json` to any command except `init` for machine-readable output.
 
 ## Getting started: `init`
 

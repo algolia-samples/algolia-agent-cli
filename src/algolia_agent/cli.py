@@ -13,6 +13,7 @@ Commands:
 """
 
 import argparse
+import getpass
 import json
 import sys
 from pathlib import Path
@@ -213,10 +214,12 @@ def cmd_create(client: AlgoliaAgentClient, args: argparse.Namespace):
     cli_vars = parse_vars(getattr(args, "var", None) or [])
     variables = resolve_vars(config_json + "\n" + instructions_template, cli_vars)
 
-    # Render config values and parse back to dict
-    config = json.loads(render(config_json, variables))
+    # Render config with JSON-safe values (escape quotes/backslashes so the
+    # substitution doesn't break the serialized JSON string).
+    json_safe_vars = {k: v.replace("\\", "\\\\").replace('"', '\\"') for k, v in variables.items()}
+    config = json.loads(render(config_json, json_safe_vars))
 
-    # Render instructions
+    # Render instructions with raw values
     instructions = render(instructions_template, variables)
 
     # Build tool from rendered config
@@ -352,7 +355,15 @@ def cmd_update(client: AlgoliaAgentClient, args: argparse.Namespace):
         variables = resolve_vars(config_json, cli_vars)
         config = json.loads(render(config_json, variables))
 
-    tool = build_tool(config) if config.get("index") else current.get("tools", [{}])[0]
+    if config.get("index"):
+        tool = build_tool(config)
+    else:
+        existing_tools = current.get("tools", [])
+        if not existing_tools or not existing_tools[0].get("indices"):
+            raise SystemExit(
+                "ERROR: no index defined. Provide --index or --config with an index key."
+            )
+        tool = existing_tools[0]
 
     # Resolve provider: only call API if provider changed
     current_provider_id = current.get("providerId", "")
@@ -463,18 +474,25 @@ def _resolve_credentials_interactively(args: argparse.Namespace) -> AlgoliaAgent
 
     print("No Algolia credentials found.\n")
     app_id = _ask("Algolia App ID")
-    api_key = _ask("Algolia API Key")
+    api_key = getpass.getpass("Algolia API Key: ")
     if not app_id or not api_key:
         raise SystemExit("ERROR: App ID and API Key are required.")
 
-    save = _ask("Save credentials to .env? [Y/n]", "Y")
+    save = _ask("Save credentials to .env?", "Y")
     if save.lower() != "n":
         env_path = Path(".env")
         lines = env_path.read_text().splitlines() if env_path.exists() else []
-        # Remove any existing entries for these keys
-        lines = [l for l in lines if not l.startswith("ALGOLIA_APP_ID=") and not l.startswith("ALGOLIA_API_KEY=")]
-        lines += [f"ALGOLIA_APP_ID={app_id}", f"ALGOLIA_API_KEY={api_key}"]
-        env_path.write_text("\n".join(lines) + "\n")
+        # Remove existing entries, handling optional leading whitespace and export prefix
+        filtered = []
+        for line in lines:
+            stripped = line.lstrip()
+            if stripped.startswith("export "):
+                stripped = stripped[len("export "):]
+            if stripped.startswith("ALGOLIA_APP_ID=") or stripped.startswith("ALGOLIA_API_KEY="):
+                continue
+            filtered.append(line)
+        filtered += [f"ALGOLIA_APP_ID={app_id}", f"ALGOLIA_API_KEY={api_key}"]
+        env_path.write_text("\n".join(filtered) + "\n")
         print(f"  ✓ .env\n")
 
     return AlgoliaAgentClient(app_id=app_id, api_key=api_key)
@@ -492,7 +510,7 @@ def cmd_init(args: argparse.Namespace):
     existing = [p for p in (config_path, prompt_path) if p.exists()]
     if existing:
         names = ", ".join(p.name for p in existing)
-        confirm = _ask(f"  {names} already exist. Overwrite? [y/N]", "N")
+        confirm = _ask(f"  {names} already exist. Overwrite?", "N")
         if confirm.lower() != "y":
             print("Aborted.")
             return
@@ -534,7 +552,7 @@ def cmd_init(args: argparse.Namespace):
     replicas = []
     while True:
         print()
-        add = _ask("Add a replica index? [y/N]", "N")
+        add = _ask("Add a replica index?", "N")
         if add.lower() != "y":
             break
         replica_index = _ask("  Replica index name")
@@ -563,7 +581,7 @@ def cmd_init(args: argparse.Namespace):
         f.write("\n")
     print(f"\n  ✓ {config_path}")
 
-    if not prompt_path.exists() or _ask(f"  {prompt_path.name} exists. Overwrite? [y/N]", "N").lower() == "y":
+    if not prompt_path.exists() or _ask(f"  {prompt_path.name} exists. Overwrite?", "N").lower() == "y":
         with open(prompt_path, "w") as f:
             f.write(_STARTER_PROMPT)
         print(f"  ✓ {prompt_path}")

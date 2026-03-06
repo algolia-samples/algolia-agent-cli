@@ -77,7 +77,13 @@ class AlgoliaAgentClient:
                 status = e.code
                 # Retry on rate limit or server error, bail immediately on anything else
                 if status in (429, 500, 502, 503, 504) and attempt < _MAX_RETRIES - 1:
-                    wait = float(e.headers.get("Retry-After") or delay)
+                    wait = delay
+                    try:
+                        header_val = e.headers and e.headers.get("Retry-After")
+                        if header_val:
+                            wait = float(header_val)
+                    except (ValueError, TypeError):
+                        pass
                     time.sleep(wait)
                     delay *= 2
                     continue
