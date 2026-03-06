@@ -125,7 +125,7 @@ class AlgoliaAgentClient:
             with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
                 result = json.loads(resp.read())
                 return [item["name"] for item in result.get("items", [])]
-        except (urllib.error.URLError, urllib.error.HTTPError):
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
             return []
 
     def list_provider_models(self, provider_id: str) -> list[str]:

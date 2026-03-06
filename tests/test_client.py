@@ -90,6 +90,25 @@ def test_list_providers(client):
     assert result == providers
 
 
+def test_list_indices(client):
+    items = [{"name": "products"}, {"name": "products_price_asc"}]
+    with patch("urllib.request.urlopen", return_value=_mock_response({"items": items})):
+        result = client.list_indices()
+    assert result == ["products", "products_price_asc"]
+
+
+def test_list_indices_returns_empty_on_http_error(client):
+    with patch("urllib.request.urlopen", side_effect=_http_error(403)):
+        result = client.list_indices()
+    assert result == []
+
+
+def test_list_indices_returns_empty_on_timeout(client):
+    with patch("urllib.request.urlopen", side_effect=TimeoutError):
+        result = client.list_indices()
+    assert result == []
+
+
 def test_list_provider_models(client):
     models = ["gemini-2.5-flash", "gemini-2.0-flash"]
     with patch("urllib.request.urlopen", return_value=_mock_response(models)):
