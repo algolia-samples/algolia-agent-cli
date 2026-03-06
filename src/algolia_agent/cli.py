@@ -638,13 +638,11 @@ def cmd_init(args: argparse.Namespace):
         extract_variables(_STARTER_PROMPT)
     ))
 
+    config_flag = f"--config {config_path} " if out_dir != Path(".") else ""
+    var_flags = (" ".join(f"--var {v}=VALUE" for v in all_vars) + " ") if all_vars else ""
     print("\nNext steps:")
     print(f"  1. Edit {prompt_path.name} with your agent instructions")
-    if all_vars:
-        var_flags = " ".join(f"--var {v}=VALUE" for v in all_vars)
-        print(f"  2. Run: algolia-agent create --config {config_path.name} {var_flags}")
-    else:
-        print(f"  2. Run: algolia-agent create --config {config_path.name}")
+    print(f"  2. Run: algolia-agent create {config_flag}{var_flags}".rstrip())
 
 
 # ── Argument parser ──────────────────────────────────────────────────────────
