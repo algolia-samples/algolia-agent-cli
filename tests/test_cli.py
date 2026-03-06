@@ -151,6 +151,70 @@ def test_dry_run(tmp_path, capsys):
     assert "701" in out
 
 
+# ── agent-config.json auto-detection ─────────────────────────────────────────
+
+def test_create_autodetects_agent_config_json(tmp_path, monkeypatch, capsys):
+    """create uses agent-config.json in CWD when --config is not provided."""
+    from algolia_agent.cli import cmd_create
+
+    prompt = tmp_path / "PROMPT.md"
+    prompt.write_text("Hello.")
+    config = tmp_path / "agent-config.json"
+    config.write_text(json.dumps({
+        "name": "Auto Agent",
+        "provider": "hackathon-gemini",
+        "model": "gemini-2.5-flash",
+        "instructions": str(prompt),
+        "index": "products",
+    }))
+    monkeypatch.chdir(tmp_path)
+
+    mock_client = MagicMock()
+    mock_client.resolve_provider_id.return_value = "provider-uuid"
+    mock_client.create_agent.return_value = {"id": "new-id", "name": "Auto Agent", "status": "draft"}
+
+    args = build_parser().parse_args(["create"])
+    cmd_create(mock_client, args)
+
+    mock_client.create_agent.assert_called_once()
+    assert mock_client.create_agent.call_args[0][0]["name"] == "Auto Agent"
+
+
+def test_create_autodetects_prompt_md(tmp_path, monkeypatch, capsys):
+    """create uses PROMPT.md in CWD when --instructions is not provided."""
+    from algolia_agent.cli import cmd_create
+
+    (tmp_path / "PROMPT.md").write_text("Hello from auto-detected prompt.")
+    monkeypatch.chdir(tmp_path)
+
+    mock_client = MagicMock()
+    mock_client.resolve_provider_id.return_value = "provider-uuid"
+    mock_client.create_agent.return_value = {"id": "new-id", "name": "My Agent", "status": "draft"}
+
+    args = build_parser().parse_args([
+        "create",
+        "--name", "My Agent",
+        "--provider", "hackathon-gemini",
+        "--model", "gemini-2.5-flash",
+        "--index", "products",
+    ])
+    cmd_create(mock_client, args)
+
+    call_payload = mock_client.create_agent.call_args[0][0]
+    assert call_payload["instructions"] == "Hello from auto-detected prompt."
+
+
+def test_create_no_config_and_no_agent_config_json(tmp_path, monkeypatch):
+    """create raises when --config is absent and no agent-config.json exists."""
+    from algolia_agent.cli import cmd_create
+
+    monkeypatch.chdir(tmp_path)
+    mock_client = MagicMock()
+    args = build_parser().parse_args(["create"])
+    with pytest.raises(SystemExit, match="missing required fields"):
+        cmd_create(mock_client, args)
+
+
 # ── --json output ─────────────────────────────────────────────────────────────
 
 def test_list_json_output(capsys):
@@ -206,6 +270,7 @@ def _mock_init_client(providers):
     """Patch AlgoliaAgentClient so cmd_init gets a pre-configured mock."""
     mock_client = MagicMock()
     mock_client.list_providers.return_value = providers
+    mock_client.list_provider_models.return_value = []  # default: no model list, use text input
     return patch("algolia_agent.cli.AlgoliaAgentClient", return_value=mock_client)
 
 
@@ -289,6 +354,7 @@ def test_init_prompts_for_missing_credentials(tmp_path, monkeypatch):
     # First call raises (no creds), second call with explicit creds succeeds
     mock_client = MagicMock()
     mock_client.list_providers.return_value = providers
+    mock_client.list_provider_models.return_value = []
     with patch("algolia_agent.cli.AlgoliaAgentClient", side_effect=[
         ValueError("Missing credentials"),
         mock_client,
@@ -321,6 +387,7 @@ def test_init_saves_credentials_to_dotenv(tmp_path, monkeypatch):
 
     mock_client = MagicMock()
     mock_client.list_providers.return_value = providers
+    mock_client.list_provider_models.return_value = []
     with patch("algolia_agent.cli.AlgoliaAgentClient", side_effect=[
         ValueError("Missing credentials"),
         mock_client,
@@ -333,6 +400,64 @@ def test_init_saves_credentials_to_dotenv(tmp_path, monkeypatch):
     env_content = (tmp_path / ".env").read_text()
     assert "ALGOLIA_APP_ID=MYAPPID" in env_content
     assert "ALGOLIA_API_KEY=myapikey" in env_content
+
+
+def test_init_model_selector(tmp_path, monkeypatch):
+    """When /providers/{id}/models returns a list, init shows a numbered selector."""
+    from algolia_agent.cli import cmd_init
+
+    providers = [{"id": "provider-uuid", "name": "hackathon-gemini"}]
+    inputs = iter([
+        "1",                      # provider choice
+        "2",                      # model choice (second model)
+        "My Agent",               # name
+        "PROMPT.md",              # instructions file
+        "products",               # index
+        "Main product catalog.",  # index description
+        "N",                      # no replicas
+    ])
+    monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
+    mock_client = MagicMock()
+    mock_client.list_providers.return_value = providers
+    mock_client.list_provider_models.return_value = ["gemini-2.5-flash", "gemini-2.0-flash"]
+    with patch("algolia_agent.cli.AlgoliaAgentClient", return_value=mock_client):
+        with patch("builtins.input", lambda _: next(inputs)):
+            parser = build_parser()
+            args = parser.parse_args(["init", "--output-dir", str(tmp_path)])
+            cmd_init(args)
+
+    config = json.loads((tmp_path / "agent-config.json").read_text())
+    assert config["model"] == "gemini-2.0-flash"
+    mock_client.list_provider_models.assert_called_once_with("provider-uuid")
+
+
+def test_init_model_selector_fallback_on_error(tmp_path, monkeypatch):
+    """When list_provider_models raises AgentAPIError, init falls back to free-text input."""
+    from algolia_agent.cli import cmd_init
+    from algolia_agent.client import AgentAPIError
+
+    providers = [{"id": "provider-uuid", "name": "hackathon-gemini", "defaultModel": "gemini-2.5-flash"}]
+    inputs = iter([
+        "1",                      # provider choice
+        "gemini-2.5-flash",       # model text input (fallback)
+        "My Agent",
+        "PROMPT.md",
+        "products",
+        "Product catalog.",
+        "N",
+    ])
+    monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
+    mock_client = MagicMock()
+    mock_client.list_providers.return_value = providers
+    mock_client.list_provider_models.side_effect = AgentAPIError(500, "server error")
+    with patch("algolia_agent.cli.AlgoliaAgentClient", return_value=mock_client):
+        with patch("builtins.input", lambda _: next(inputs)):
+            parser = build_parser()
+            args = parser.parse_args(["init", "--output-dir", str(tmp_path)])
+            cmd_init(args)
+
+    config = json.loads((tmp_path / "agent-config.json").read_text())
+    assert config["model"] == "gemini-2.5-flash"
 
 
 def test_init_non_tty_errors(monkeypatch):

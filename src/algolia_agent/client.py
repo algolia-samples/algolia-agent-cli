@@ -58,7 +58,7 @@ class AlgoliaAgentClient:
 
         self.base_url = f"https://{self.app_id}.algolia.net{self.BASE_PATH}"
 
-    def _request(self, path: str, method: str = "GET", body: dict | None = None) -> dict:
+    def _request(self, path: str, method: str = "GET", body: dict | None = None) -> dict | list:
         url = f"{self.base_url}{path}"
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(url, data=data, method=method)
@@ -105,6 +105,13 @@ class AlgoliaAgentClient:
 
     def list_providers(self) -> list[dict]:
         result = self._request("/providers")
+        return result.get("data", [])
+
+    def list_provider_models(self, provider_id: str) -> list[str]:
+        result = self._request(f"/providers/{provider_id}/models")
+        # Endpoint returns a plain JSON array, not a wrapped {"data": [...]}
+        if isinstance(result, list):
+            return result
         return result.get("data", [])
 
     def resolve_provider_id(self, provider_name: str) -> str:
