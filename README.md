@@ -54,32 +54,33 @@ No Algolia credentials found.
 Algolia App ID: YOURAPPID
 Algolia API Key: ****
 Save credentials to .env? [Y/n]: Y
-  ✓ .env
+✓ .env
 
 Fetching available providers...
 
-  [1] hackathon-gemini
-  [2] openai
+# fuzzy selector — arrow keys to browse, type to filter
+? Select a provider: hackathon-gemini
+? Select a model: gemini-2.5-flash
 
-Provider: 1
-Model [gemini-2.5-flash]:
 Agent name (use {{vars}} for dynamic values) [My Agent]: My Agent for {{event_name}}
 Instructions file [PROMPT.md]:
-Primary index name (use {{vars}} for dynamic values): products_{{event_id}}
-Primary index description: Product catalog for {{event_name}}.
 
-Add a replica index? [y/N]: y
-  Replica index name: products_{{event_id}}_price_asc
-  Replica description [products_{{event_id}}_price_asc]: Sorted by price ascending.
+# fuzzy selector — includes <no index — create without tools> at top
+? Primary index (arrow keys to browse, Enter to select): products_{{event_id}}
+Primary index description [Search index for products_{{event_id}}.]: Product catalog for {{event_name}}.
 
-Add a replica index? [y/N]: N
+# fuzzy selector — includes <done — no more replicas> and <custom name>
+? Add a replica index: products_{{event_id}}_price_asc
+  Replica description [Replica index of Product catalog for {{event_name}}.]: Sorted by price ascending.
 
-  ✓ agent-config.json
-  ✓ PROMPT.md
+? Add a replica index: <done — no more replicas>
+
+✓ agent-config.json
+✓ PROMPT.md
 
 Next steps:
   1. Edit PROMPT.md with your agent instructions
-  2. Run: algolia-agent create --config agent-config.json --var event_id=VALUE --var event_name=VALUE
+  2. Run: algolia-agent create --var event_id=VALUE --var event_name=VALUE
 ```
 
 ## Creating an agent
