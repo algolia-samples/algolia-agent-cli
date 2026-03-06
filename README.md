@@ -44,13 +44,28 @@ Add `--json` to any command for machine-readable output.
 
 ### File-based (recommended)
 
-Put shared settings in `agent-config.json` and pass dynamic values as CLI flags:
+Put all settings in `agent-config.json`, using `{{variable}}` placeholders for anything
+that changes between runs. Template variables are resolved across both the config file
+and the instructions file in a single pass — missing vars are reported together.
 
 ```json
 {
+  "name": "My Agent for {{event_name}}",
   "provider": "hackathon-gemini",
   "model": "gemini-2.5-flash",
   "instructions": "PROMPT.md",
+  "index": "products_{{event_id}}",
+  "index_description": "Product catalog for {{event_name}}. Use for search and inventory queries.",
+  "replicas": [
+    {
+      "index": "products_{{event_id}}_price_asc",
+      "description": "Products sorted by price ascending (lowest first)."
+    },
+    {
+      "index": "products_{{event_id}}_price_desc",
+      "description": "Products sorted by price descending (highest first)."
+    }
+  ],
   "config": {
     "suggestions": { "enabled": true }
   }
@@ -60,13 +75,14 @@ Put shared settings in `agent-config.json` and pass dynamic values as CLI flags:
 ```bash
 algolia-agent create \
     --config agent-config.json \
-    --name "My Agent" \
-    --index products \
-    --replica products_price_asc \
-    --replica products_price_desc \
-    --var event_name="eTail Palm Springs 2026" \
+    --var event_id=spring-2026 \
+    --var event_name="Spring Conference 2026" \
     --var booth=701
 ```
+
+> **Note:** The Agent Studio API requires a `description` on every index entry. The
+> `index_description` key sets the description for the primary index; each replica object
+> must include a `description` field. If omitted, the index name is used as a fallback.
 
 ### CLI-only
 

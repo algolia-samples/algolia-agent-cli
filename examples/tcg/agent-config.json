@@ -1,8 +1,21 @@
 {
-  "_note": "TCG reference config. name/index/replicas are supplied by create_event_agent.py as CLI flags.",
+  "_note": "TCG reference config. Pass --var event_id=... --var event_name=... --var booth=...",
+  "name": "TCG Agent {{event_name}}",
   "provider": "hackathon-gemini",
   "model": "gemini-2.5-flash",
   "instructions": "PROMPT.md",
+  "index": "tcg_cards_{{event_id}}",
+  "index_description": "Pokemon cards in the {{event_name}} vending machine. Use for inventory and pricing queries.",
+  "replicas": [
+    {
+      "index": "tcg_cards_{{event_id}}_price_asc",
+      "description": "Pokemon cards sorted by estimated value ascending (lowest price first)."
+    },
+    {
+      "index": "tcg_cards_{{event_id}}_price_desc",
+      "description": "Pokemon cards sorted by estimated value descending (highest price first)."
+    }
+  ],
   "config": {
     "suggestions": { "enabled": true }
   }

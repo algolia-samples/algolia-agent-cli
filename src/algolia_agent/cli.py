@@ -77,13 +77,26 @@ def parse_vars(var_list: list[str]) -> dict:
 
 
 def build_tool(config: dict) -> dict:
+    """Build the algolia_search_index tool payload.
+
+    The API requires a description on each index entry. Config may supply
+    them as {"index": "name", "description": "..."} objects; plain strings
+    fall back to using the index name as the description.
+    """
+    def _index_entry(raw) -> dict:
+        if isinstance(raw, dict):
+            return {"index": raw["index"], "description": raw.get("description", raw["index"])}
+        return {"index": raw, "description": raw}
+
+    primary_desc = config.get("index_description", config["index"])
+    indices = [{"index": config["index"], "description": primary_desc}]
+    for r in config.get("replicas", []):
+        indices.append(_index_entry(r))
+
     return {
         "name": "algolia_search_index",
         "type": "algolia_search_index",
-        "indices": [
-            {"index": config["index"]},
-            *[{"index": r} for r in config.get("replicas", [])],
-        ],
+        "indices": indices,
     }
 
 
@@ -174,7 +187,7 @@ def cmd_create(client: AlgoliaAgentClient, args: argparse.Namespace):
     file_config = load_config(args.config) if args.config else {}
     config = merge_config(file_config, args)
 
-    # Validate required fields
+    # Validate required fields (pre-rendering)
     required = ["name", "provider", "model", "instructions", "index"]
     missing = [k for k in required if not config.get(k)]
     if missing:
@@ -186,7 +199,6 @@ def cmd_create(client: AlgoliaAgentClient, args: argparse.Namespace):
     # Load instructions file
     instructions_path = Path(config["instructions"])
     if not instructions_path.exists():
-        # Try relative to config file if given
         if args.config:
             instructions_path = Path(args.config).parent / config["instructions"]
     if not instructions_path.exists():
@@ -194,12 +206,19 @@ def cmd_create(client: AlgoliaAgentClient, args: argparse.Namespace):
 
     instructions_template = instructions_path.read_text()
 
-    # Resolve template variables
+    # Resolve template variables across BOTH config (serialized) and instructions
+    # in a single pass — missing vars are reported together regardless of source.
+    config_json = json.dumps(config)
     cli_vars = parse_vars(getattr(args, "var", None) or [])
-    variables = resolve_vars(instructions_template, cli_vars)
+    variables = resolve_vars(config_json + "\n" + instructions_template, cli_vars)
+
+    # Render config values and parse back to dict
+    config = json.loads(render(config_json, variables))
+
+    # Render instructions
     instructions = render(instructions_template, variables)
 
-    # Build tool
+    # Build tool from rendered config
     tool = build_tool(config)
 
     if args.dry_run:
