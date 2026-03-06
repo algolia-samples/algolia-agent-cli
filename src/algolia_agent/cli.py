@@ -567,7 +567,7 @@ def cmd_init(args: argparse.Namespace):
     indices = client.list_indices()
     selection = _select(
         "Primary index (arrow keys to browse, Enter to select):",
-        indices + [_NO_INDEX],
+        [_NO_INDEX] + indices,
     )
     index = None if selection == _NO_INDEX else selection
 
