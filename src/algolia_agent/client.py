@@ -107,6 +107,13 @@ class AlgoliaAgentClient:
         result = self._request("/providers")
         return result.get("data", [])
 
+    def list_provider_models(self, provider_id: str) -> list[str]:
+        result = self._request(f"/providers/{provider_id}/models")
+        # Endpoint returns a plain JSON array, not a wrapped {"data": [...]}
+        if isinstance(result, list):
+            return result
+        return result.get("data", [])
+
     def resolve_provider_id(self, provider_name: str) -> str:
         """Resolve a provider name (e.g. 'hackathon-gemini') to its UUID."""
         providers = self.list_providers()

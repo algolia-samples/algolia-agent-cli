@@ -90,6 +90,13 @@ def test_list_providers(client):
     assert result == providers
 
 
+def test_list_provider_models(client):
+    models = ["gemini-2.5-flash", "gemini-2.0-flash"]
+    with patch("urllib.request.urlopen", return_value=_mock_response(models)):
+        result = client.list_provider_models("provider-uuid")
+    assert result == models
+
+
 def test_resolve_provider_id(client):
     providers = [{"id": "uuid-123", "name": "hackathon-gemini"}]
     with patch("urllib.request.urlopen", return_value=_mock_response({"data": providers})):

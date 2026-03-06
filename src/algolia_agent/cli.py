@@ -533,9 +533,22 @@ def cmd_init(args: argparse.Namespace):
     provider_idx = _ask_int("\nProvider", providers)
     provider = providers[provider_idx]
 
-    model = _ask("Model", provider.get("defaultModel") or "")
-    if not model:
-        raise SystemExit("ERROR: model is required.")
+    models = []
+    try:
+        models = client.list_provider_models(provider["id"])
+    except AgentAPIError:
+        pass  # fall through to free-text input
+
+    if models:
+        print()
+        for i, m in enumerate(models, 1):
+            print(f"  [{i}] {m}")
+        model_idx = _ask_int("\nModel", models)
+        model = models[model_idx]
+    else:
+        model = _ask("Model", provider.get("defaultModel") or "")
+        if not model:
+            raise SystemExit("ERROR: model is required.")
 
     print()
     name = _ask("Agent name (use {{vars}} for dynamic values)", "My Agent")
