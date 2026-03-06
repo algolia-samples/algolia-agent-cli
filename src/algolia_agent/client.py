@@ -9,9 +9,14 @@ Credential resolution order:
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+_TIMEOUT = 30          # seconds per request
+_MAX_RETRIES = 3       # attempts total (1 initial + 2 retries)
+_RETRY_BACKOFF = 1.0   # seconds; doubles each retry
 
 
 def _load_dotenv(path: Path) -> dict[str, str]:
@@ -62,13 +67,27 @@ class AlgoliaAgentClient:
         req.add_header("Content-Type", "application/json")
         req.add_header("Accept", "application/json")
         req.add_header("User-Agent", "algolia-agent-cli/0.1.0")
-        try:
-            with urllib.request.urlopen(req) as resp:
-                body = resp.read()
-                return json.loads(body) if body else {}
-        except urllib.error.HTTPError as e:
-            body_text = e.read().decode(errors="replace")
-            raise AgentAPIError(e.code, body_text) from e
+        delay = _RETRY_BACKOFF
+        for attempt in range(_MAX_RETRIES):
+            try:
+                with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+                    body = resp.read()
+                    return json.loads(body) if body else {}
+            except urllib.error.HTTPError as e:
+                status = e.code
+                # Retry on rate limit or server error, bail immediately on anything else
+                if status in (429, 500, 502, 503, 504) and attempt < _MAX_RETRIES - 1:
+                    wait = float(e.headers.get("Retry-After") or delay)
+                    time.sleep(wait)
+                    delay *= 2
+                    continue
+                raise AgentAPIError(status, e.read().decode(errors="replace")) from e
+            except urllib.error.URLError as e:
+                if attempt < _MAX_RETRIES - 1:
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                raise AgentAPIError(0, f"Connection error: {e.reason}") from e
 
     def list_agents(self) -> list[dict]:
         result = self._request("/agents")

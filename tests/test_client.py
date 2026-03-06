@@ -148,3 +148,88 @@ def test_http_401_raises_agent_api_error(client):
         with pytest.raises(AgentAPIError) as exc_info:
             client.list_agents()
     assert exc_info.value.status_code == 401
+
+
+# ── Retry behaviour ───────────────────────────────────────────────────────────
+
+def _http_error(code: int, body: bytes = b"error") -> urllib.error.HTTPError:
+    hdrs = MagicMock()
+    hdrs.get = MagicMock(return_value=None)  # no Retry-After header
+    return urllib.error.HTTPError(
+        url="http://example.com", code=code,
+        msg="err", hdrs=hdrs, fp=BytesIO(body),
+    )
+
+
+def test_retries_on_429_then_succeeds(client):
+    agent = {"id": "abc", "name": "Test", "status": "draft"}
+    responses = [_http_error(429), _mock_response({"data": agent})]
+    with patch("urllib.request.urlopen", side_effect=responses):
+        with patch("time.sleep") as mock_sleep:
+            result = client.get_agent("abc")
+    assert result == agent
+    mock_sleep.assert_called_once()
+
+
+def test_retries_on_503_then_succeeds(client):
+    agent = {"id": "abc", "name": "Test", "status": "draft"}
+    responses = [_http_error(503), _http_error(503), _mock_response({"data": agent})]
+    with patch("urllib.request.urlopen", side_effect=responses):
+        with patch("time.sleep"):
+            result = client.get_agent("abc")
+    assert result == agent
+
+
+def test_raises_after_max_retries(client):
+    with patch("urllib.request.urlopen", side_effect=_http_error(503)):
+        with patch("time.sleep"):
+            with pytest.raises(AgentAPIError) as exc_info:
+                client.get_agent("abc")
+    assert exc_info.value.status_code == 503
+
+
+def test_no_retry_on_4xx(client):
+    """4xx errors (except 429) should fail immediately without retrying."""
+    with patch("urllib.request.urlopen", side_effect=_http_error(422)) as mock_urlopen:
+        with patch("time.sleep") as mock_sleep:
+            with pytest.raises(AgentAPIError) as exc_info:
+                client.create_agent({})
+    assert exc_info.value.status_code == 422
+    assert mock_urlopen.call_count == 1
+    mock_sleep.assert_not_called()
+
+
+def test_retries_on_url_error(client):
+    """Network errors should retry then raise AgentAPIError(0, ...)."""
+    net_err = urllib.error.URLError("Connection refused")
+    agent = {"id": "abc", "name": "Test", "status": "draft"}
+    responses = [net_err, _mock_response({"data": agent})]
+    with patch("urllib.request.urlopen", side_effect=responses):
+        with patch("time.sleep"):
+            result = client.get_agent("abc")
+    assert result == agent
+
+
+def test_url_error_exhausted_raises(client):
+    net_err = urllib.error.URLError("Connection refused")
+    with patch("urllib.request.urlopen", side_effect=net_err):
+        with patch("time.sleep"):
+            with pytest.raises(AgentAPIError) as exc_info:
+                client.list_agents()
+    assert exc_info.value.status_code == 0
+    assert "Connection error" in str(exc_info.value)
+
+
+def test_retry_after_header_respected(client):
+    """429 with Retry-After header should sleep for the specified duration."""
+    hdrs = MagicMock()
+    hdrs.get = MagicMock(return_value="5")
+    err = urllib.error.HTTPError(
+        url="http://example.com", code=429,
+        msg="Too Many Requests", hdrs=hdrs, fp=BytesIO(b"rate limited"),
+    )
+    agent = {"id": "abc", "name": "Test", "status": "draft"}
+    with patch("urllib.request.urlopen", side_effect=[err, _mock_response({"data": agent})]):
+        with patch("time.sleep") as mock_sleep:
+            client.get_agent("abc")
+    mock_sleep.assert_called_once_with(5.0)
