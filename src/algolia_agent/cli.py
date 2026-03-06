@@ -598,7 +598,7 @@ def cmd_init(args: argparse.Namespace):
             else:
                 replica_index = selection
                 selected_replica_indices.add(replica_index)
-            replica_desc = _ask("  Replica description", replica_index)
+            replica_desc = _ask("  Replica description", f"Replica index of {index_description}")
             replicas.append({"index": replica_index, "description": replica_desc})
     else:
         index_description = None
