@@ -200,6 +200,147 @@ def test_create_json_output(tmp_path, capsys):
     assert data["status"] == "draft"
 
 
+# ── init ─────────────────────────────────────────────────────────────────────
+
+def _mock_init_client(providers):
+    """Patch AlgoliaAgentClient so cmd_init gets a pre-configured mock."""
+    mock_client = MagicMock()
+    mock_client.list_providers.return_value = providers
+    return patch("algolia_agent.cli.AlgoliaAgentClient", return_value=mock_client)
+
+
+def test_init_writes_config_and_prompt(tmp_path, monkeypatch):
+    from algolia_agent.cli import cmd_init
+
+    providers = [{"id": "uuid", "name": "hackathon-gemini", "defaultModel": "gemini-2.5-flash"}]
+    inputs = iter([
+        "1",                      # provider choice
+        "gemini-2.5-flash",       # model
+        "My Agent",               # name
+        "PROMPT.md",              # instructions file
+        "products",               # index
+        "Main product catalog.",  # index description
+        "N",                      # no replicas
+    ])
+    monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
+    with _mock_init_client(providers):
+        with patch("builtins.input", lambda _: next(inputs)):
+            parser = build_parser()
+            args = parser.parse_args(["init", "--output-dir", str(tmp_path)])
+            cmd_init(args)
+
+    config = json.loads((tmp_path / "agent-config.json").read_text())
+    assert config["provider"] == "hackathon-gemini"
+    assert config["model"] == "gemini-2.5-flash"
+    assert config["index"] == "products"
+    assert config["index_description"] == "Main product catalog."
+    assert "replicas" not in config
+    assert (tmp_path / "PROMPT.md").exists()
+
+
+def test_init_with_replicas(tmp_path, monkeypatch):
+    from algolia_agent.cli import cmd_init
+
+    providers = [{"id": "uuid", "name": "hackathon-gemini", "defaultModel": "gemini-2.5-flash"}]
+    inputs = iter([
+        "1",                               # provider
+        "gemini-2.5-flash",                # model
+        "My Agent",                        # name
+        "PROMPT.md",                       # instructions
+        "products_{{event_id}}",           # index
+        "Product catalog.",                # index description
+        "y",                               # add replica
+        "products_{{event_id}}_price_asc", # replica index
+        "Sorted by price asc.",            # replica description
+        "N",                               # no more replicas
+    ])
+    monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
+    with _mock_init_client(providers):
+        with patch("builtins.input", lambda _: next(inputs)):
+            parser = build_parser()
+            args = parser.parse_args(["init", "--output-dir", str(tmp_path)])
+            cmd_init(args)
+
+    config = json.loads((tmp_path / "agent-config.json").read_text())
+    assert len(config["replicas"]) == 1
+    assert config["replicas"][0]["index"] == "products_{{event_id}}_price_asc"
+    assert config["replicas"][0]["description"] == "Sorted by price asc."
+
+
+def test_init_prompts_for_missing_credentials(tmp_path, monkeypatch):
+    from algolia_agent.cli import cmd_init
+
+    providers = [{"id": "uuid", "name": "hackathon-gemini", "defaultModel": "gemini-2.5-flash"}]
+    inputs = iter([
+        "MYAPPID",        # App ID prompt
+        "myapikey",       # API Key prompt
+        "n",              # don't save to .env
+        "1",              # provider
+        "gemini-2.5-flash",
+        "My Agent",
+        "PROMPT.md",
+        "products",
+        "Product catalog.",
+        "N",
+    ])
+    monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
+    monkeypatch.delenv("ALGOLIA_APP_ID", raising=False)
+    monkeypatch.delenv("ALGOLIA_API_KEY", raising=False)
+
+    # First call raises (no creds), second call with explicit creds succeeds
+    mock_client = MagicMock()
+    mock_client.list_providers.return_value = providers
+    with patch("algolia_agent.cli.AlgoliaAgentClient", side_effect=[
+        ValueError("Missing credentials"),
+        mock_client,
+    ]):
+        with patch("algolia_agent.cli.Path.cwd", return_value=MagicMock(
+            __truediv__=lambda self, other: MagicMock(exists=lambda: False)
+        )):
+            with patch("builtins.input", lambda _: next(inputs)):
+                parser = build_parser()
+                args = parser.parse_args(["init", "--output-dir", str(tmp_path)])
+                cmd_init(args)
+
+    config = json.loads((tmp_path / "agent-config.json").read_text())
+    assert config["provider"] == "hackathon-gemini"
+
+
+def test_init_saves_credentials_to_dotenv(tmp_path, monkeypatch):
+    from algolia_agent.cli import cmd_init
+
+    providers = [{"id": "uuid", "name": "hackathon-gemini", "defaultModel": "gemini-2.5-flash"}]
+    inputs = iter([
+        "MYAPPID", "myapikey", "Y",  # creds + save to .env
+        "1", "gemini-2.5-flash", "My Agent", "PROMPT.md", "products", "Product catalog.", "N",
+    ])
+    monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
+    monkeypatch.delenv("ALGOLIA_APP_ID", raising=False)
+    monkeypatch.delenv("ALGOLIA_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    mock_client = MagicMock()
+    mock_client.list_providers.return_value = providers
+    with patch("algolia_agent.cli.AlgoliaAgentClient", side_effect=[
+        ValueError("Missing credentials"),
+        mock_client,
+    ]):
+        with patch("builtins.input", lambda _: next(inputs)):
+            args = build_parser().parse_args(["init", "--output-dir", str(tmp_path)])
+            cmd_init(args)
+
+    env_content = (tmp_path / ".env").read_text()
+    assert "ALGOLIA_APP_ID=MYAPPID" in env_content
+    assert "ALGOLIA_API_KEY=myapikey" in env_content
+
+
+def test_init_non_tty_errors(monkeypatch):
+    from algolia_agent.cli import cmd_init
+    monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: False))
+    with pytest.raises(SystemExit, match="interactive terminal"):
+        cmd_init(MagicMock(output_dir="."))
+
+
 # ── Exit codes ────────────────────────────────────────────────────────────────
 
 def test_missing_credentials_exits_1(monkeypatch, capsys):

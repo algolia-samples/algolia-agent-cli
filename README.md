@@ -30,6 +30,7 @@ algolia-agent --app-id YOURAPPID --api-key yourapikey list
 ## Commands
 
 ```bash
+algolia-agent init [--output-dir .]    # Scaffold agent-config.json + PROMPT.md interactively
 algolia-agent list                     # List all agents
 algolia-agent get <agent_id>           # Full agent config
 algolia-agent providers                # List available LLM providers
@@ -39,6 +40,48 @@ algolia-agent delete <agent_id> --confirm
 ```
 
 Add `--json` to any command for machine-readable output.
+
+## Getting started: `init`
+
+The fastest way to get started is `algolia-agent init`. It checks for credentials
+(prompting and optionally saving to `.env` if they're missing), fetches your available
+providers, and walks you through building `agent-config.json` and a starter `PROMPT.md`:
+
+```
+$ algolia-agent init
+
+No Algolia credentials found.
+
+Algolia App ID: YOURAPPID
+Algolia API Key: ****
+Save credentials to .env? [Y/n]: Y
+  ✓ .env
+
+Fetching available providers...
+
+  [1] hackathon-gemini
+  [2] openai
+
+Provider: 1
+Model [gemini-2.5-flash]:
+Agent name (use {{vars}} for dynamic values) [My Agent]: My Agent for {{event_name}}
+Instructions file [PROMPT.md]:
+Primary index name (use {{vars}} for dynamic values): products_{{event_id}}
+Primary index description: Product catalog for {{event_name}}.
+
+Add a replica index? [y/N]: y
+  Replica index name: products_{{event_id}}_price_asc
+  Replica description [products_{{event_id}}_price_asc]: Sorted by price ascending.
+
+Add a replica index? [y/N]: N
+
+  ✓ agent-config.json
+  ✓ PROMPT.md
+
+Next steps:
+  1. Edit PROMPT.md with your agent instructions
+  2. Run: algolia-agent create --config agent-config.json --var event_id=VALUE --var event_name=VALUE
+```
 
 ## Creating an agent
 
