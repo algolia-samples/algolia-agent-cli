@@ -143,8 +143,8 @@ algolia-agent create \
 --flag  >  agent-config.json  >  interactive prompt (TTY)  >  error
 ```
 
-Required: `name`, `provider`, `model`, `instructions`
-Optional: `index`, `--replica` (repeatable), `config` block (file only)
+Required: `--name`, `--provider`, `--model`, `--instructions`
+Optional: `--index`, `--replica` (repeatable), `config` block (file only)
 
 ## Template variables
 
