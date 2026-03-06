@@ -18,7 +18,7 @@ import json
 import sys
 from pathlib import Path
 
-import questionary
+from InquirerPy import inquirer
 
 from .client import AgentAPIError, AlgoliaAgentClient
 from .template import extract_variables, render
@@ -459,11 +459,11 @@ Reply in the user's language, falling back to English.
 
 
 def _select(message: str, choices: list) -> str:
-    """Inline arrow-key selector. Raises SystemExit if the user cancels (Ctrl+C)."""
-    result = questionary.select(message, choices=choices).ask()
-    if result is None:
+    """Fuzzy selector: arrow keys to browse, type to filter. Raises SystemExit on cancel."""
+    try:
+        return inquirer.fuzzy(message=message, choices=choices, max_height="40%").execute()
+    except KeyboardInterrupt:
         raise SystemExit("Aborted.")
-    return result
 
 
 def _ask(prompt: str, default: str = "") -> str:

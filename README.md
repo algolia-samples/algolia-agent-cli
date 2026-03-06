@@ -236,6 +236,6 @@ card vending machine agent with per-event index names and template variables.
 ## Running tests
 
 ```bash
-pip install pytest questionary
+pip install pytest InquirerPy
 pytest tests/ -v
 ```

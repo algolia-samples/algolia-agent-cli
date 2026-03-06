@@ -9,7 +9,7 @@ description = "CLI for Algolia Agent Studio"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-dependencies = ["questionary>=2.0.0"]
+dependencies = ["InquirerPy>=0.3.4"]
 
 [project.scripts]
 algolia-agent = "algolia_agent.cli:main"
