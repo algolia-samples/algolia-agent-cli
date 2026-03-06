@@ -7,7 +7,7 @@ name = "algolia-agent"
 version = "0.1.0"
 description = "CLI for Algolia Agent Studio"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Chuck Meyer", email = "chuck.meyer@algolia.com" }]
 dependencies = ["InquirerPy>=0.3.4"]
