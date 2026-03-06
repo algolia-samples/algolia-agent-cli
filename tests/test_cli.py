@@ -151,6 +151,70 @@ def test_dry_run(tmp_path, capsys):
     assert "701" in out
 
 
+# ── agent-config.json auto-detection ─────────────────────────────────────────
+
+def test_create_autodetects_agent_config_json(tmp_path, monkeypatch, capsys):
+    """create uses agent-config.json in CWD when --config is not provided."""
+    from algolia_agent.cli import cmd_create
+
+    prompt = tmp_path / "PROMPT.md"
+    prompt.write_text("Hello.")
+    config = tmp_path / "agent-config.json"
+    config.write_text(json.dumps({
+        "name": "Auto Agent",
+        "provider": "hackathon-gemini",
+        "model": "gemini-2.5-flash",
+        "instructions": str(prompt),
+        "index": "products",
+    }))
+    monkeypatch.chdir(tmp_path)
+
+    mock_client = MagicMock()
+    mock_client.resolve_provider_id.return_value = "provider-uuid"
+    mock_client.create_agent.return_value = {"id": "new-id", "name": "Auto Agent", "status": "draft"}
+
+    args = build_parser().parse_args(["create"])
+    cmd_create(mock_client, args)
+
+    mock_client.create_agent.assert_called_once()
+    assert mock_client.create_agent.call_args[0][0]["name"] == "Auto Agent"
+
+
+def test_create_autodetects_prompt_md(tmp_path, monkeypatch, capsys):
+    """create uses PROMPT.md in CWD when --instructions is not provided."""
+    from algolia_agent.cli import cmd_create
+
+    (tmp_path / "PROMPT.md").write_text("Hello from auto-detected prompt.")
+    monkeypatch.chdir(tmp_path)
+
+    mock_client = MagicMock()
+    mock_client.resolve_provider_id.return_value = "provider-uuid"
+    mock_client.create_agent.return_value = {"id": "new-id", "name": "My Agent", "status": "draft"}
+
+    args = build_parser().parse_args([
+        "create",
+        "--name", "My Agent",
+        "--provider", "hackathon-gemini",
+        "--model", "gemini-2.5-flash",
+        "--index", "products",
+    ])
+    cmd_create(mock_client, args)
+
+    call_payload = mock_client.create_agent.call_args[0][0]
+    assert call_payload["instructions"] == "Hello from auto-detected prompt."
+
+
+def test_create_no_config_and_no_agent_config_json(tmp_path, monkeypatch):
+    """create raises when --config is absent and no agent-config.json exists."""
+    from algolia_agent.cli import cmd_create
+
+    monkeypatch.chdir(tmp_path)
+    mock_client = MagicMock()
+    args = build_parser().parse_args(["create"])
+    with pytest.raises(SystemExit, match="missing required fields"):
+        cmd_create(mock_client, args)
+
+
 # ── --json output ─────────────────────────────────────────────────────────────
 
 def test_list_json_output(capsys):

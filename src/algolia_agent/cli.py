@@ -185,9 +185,14 @@ def cmd_providers(client: AlgoliaAgentClient, args: argparse.Namespace):
 
 
 def cmd_create(client: AlgoliaAgentClient, args: argparse.Namespace):
-    # Load and merge config
-    file_config = load_config(args.config) if args.config else {}
+    # Load and merge config; auto-detect agent-config.json if --config not given
+    config_path = args.config or (Path("agent-config.json") if Path("agent-config.json").exists() else None)
+    file_config = load_config(config_path) if config_path else {}
     config = merge_config(file_config, args)
+
+    # Auto-detect PROMPT.md if instructions not specified
+    if not config.get("instructions") and Path("PROMPT.md").exists():
+        config["instructions"] = "PROMPT.md"
 
     # Validate required fields (pre-rendering)
     required = ["name", "provider", "model", "instructions", "index"]
@@ -309,8 +314,9 @@ def _diff(current: dict, new_payload: dict) -> list[str]:
 def cmd_update(client: AlgoliaAgentClient, args: argparse.Namespace):
     current = client.get_agent(args.agent_id)
 
-    # Load and merge config; fall back to current agent fields for anything not specified
-    file_config = load_config(args.config) if args.config else {}
+    # Load and merge config; auto-detect agent-config.json if --config not given
+    config_path = args.config or (Path("agent-config.json") if Path("agent-config.json").exists() else None)
+    file_config = load_config(config_path) if config_path else {}
     config = merge_config(file_config, args)
 
     # Fill in any fields not provided from the current agent state
