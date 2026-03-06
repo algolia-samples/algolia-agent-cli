@@ -240,3 +240,39 @@ def test_retry_after_header_respected(client):
         with patch("time.sleep") as mock_sleep:
             client.get_agent("abc")
     mock_sleep.assert_called_once_with(5.0)
+
+
+def test_timeout_error_raises_clear_message(client):
+    """Bare TimeoutError (Python 3.11+) surfaces a human-readable AgentAPIError."""
+    with patch("urllib.request.urlopen", side_effect=TimeoutError):
+        with patch("time.sleep"):
+            with pytest.raises(AgentAPIError) as exc_info:
+                client.list_agents()
+    assert exc_info.value.status_code == 0
+    assert "timed out" in str(exc_info.value)
+
+
+def test_timeout_error_retries(client):
+    """TimeoutError is retried _MAX_RETRIES times before giving up."""
+    from algolia_agent.client import _MAX_RETRIES
+    call_count = 0
+
+    def counting_urlopen(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise TimeoutError
+
+    with patch("urllib.request.urlopen", side_effect=counting_urlopen):
+        with patch("time.sleep"):
+            with pytest.raises(AgentAPIError):
+                client.list_agents()
+    assert call_count == _MAX_RETRIES
+
+
+def test_timeout_error_retries_then_succeeds(client):
+    """A transient TimeoutError followed by a successful response works."""
+    agent = {"id": "abc", "name": "Test", "status": "draft"}
+    with patch("urllib.request.urlopen", side_effect=[TimeoutError, _mock_response({"data": agent})]):
+        with patch("time.sleep"):
+            result = client.get_agent("abc")
+    assert result == agent
