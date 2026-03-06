@@ -559,9 +559,25 @@ def cmd_init(args: argparse.Namespace):
     print()
     name = _ask("Agent name (use {{vars}} for dynamic values)", "My Agent")
     instructions_file = _ask("Instructions file", "PROMPT.md")
-    index = _ask("Primary index name (use {{vars}} for dynamic values)")
-    if not index:
-        raise SystemExit("ERROR: index name is required.")
+
+    _CUSTOM = "<custom name>"
+    indices = client.list_indices()
+    if indices:
+        print()
+        for i, idx in enumerate(indices, 1):
+            print(f"  [{i}] {idx}")
+        print(f"  [{len(indices) + 1}] {_CUSTOM}")
+        choice = _ask_int("\nPrimary index", indices + [_CUSTOM])
+        if choice < len(indices):
+            index = indices[choice]
+        else:
+            index = _ask("  Index name (use {{vars}} for dynamic values)")
+            if not index:
+                raise SystemExit("ERROR: index name is required.")
+    else:
+        index = _ask("Primary index name (use {{vars}} for dynamic values)")
+        if not index:
+            raise SystemExit("ERROR: index name is required.")
 
     index_description = _ask(
         "Primary index description (use {{vars}} for dynamic values)",
