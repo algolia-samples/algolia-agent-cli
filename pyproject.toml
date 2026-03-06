@@ -9,6 +9,12 @@ description = "CLI for Algolia Agent Studio"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
+authors = [{ name = "Chuck Meyer", email = "chuck.meyer@algolia.com" }]
+
+[project.urls]
+Homepage = "https://github.com/algolia-samples/algolia-agent-cli"
+Repository = "https://github.com/algolia-samples/algolia-agent-cli"
+Issues = "https://github.com/algolia-samples/algolia-agent-cli/issues"
 dependencies = ["InquirerPy>=0.3.4"]
 
 [project.optional-dependencies]
