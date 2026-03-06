@@ -94,6 +94,12 @@ class AlgoliaAgentClient:
                     delay *= 2
                     continue
                 raise AgentAPIError(0, f"Connection error: {e.reason}") from e
+            except TimeoutError:
+                if attempt < _MAX_RETRIES - 1:
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                raise AgentAPIError(0, f"Request timed out after {_TIMEOUT}s") from None
 
     def list_agents(self) -> list[dict]:
         result = self._request("/agents")
