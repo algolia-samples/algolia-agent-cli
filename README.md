@@ -143,18 +143,37 @@ algolia-agent create \
 --flag  >  agent-config.json  >  interactive prompt (TTY)  >  error
 ```
 
-Required: `name`, `provider`, `model`, `instructions`, `index`
-Optional: `--replica` (repeatable), `config` block (file only)
+Required: `name`, `provider`, `model`, `instructions`
+Optional: `index`, `--replica` (repeatable), `config` block (file only)
 
 ## Template variables
 
-The `--instructions` file is scanned for `{{variable_name}}` placeholders. Supply
-values with `--var key=value` (repeatable).
+`{{variable_name}}` placeholders work anywhere in `agent-config.json` and in your
+instructions file. Both are scanned together in a single pass — missing vars are
+reported all at once. Supply values with `--var key=value` (repeatable).
+
+A typical setup has placeholders in the config (index names, agent name) and in
+the prompt (event-specific context):
+
+**`agent-config.json`**
+```json
+{
+  "name": "My Agent for {{event_name}}",
+  "index": "products_{{event_id}}"
+}
+```
+
+**`PROMPT.md`**
+```markdown
+You are a helpful assistant at {{event_name}} (booth {{booth}}).
+Use the search tool to answer questions about available products.
+```
 
 ```bash
 # All vars via CLI (pipeline-safe)
 algolia-agent create --config agent-config.json \
-    --var event_name="eTail Palm Springs 2026" \
+    --var event_id=spring-2026 \
+    --var event_name="Spring Conference 2026" \
     --var booth=701 \
     --json
 
@@ -163,8 +182,8 @@ algolia-agent create --config agent-config.json
 
 # Missing vars in non-interactive context → error
 algolia-agent create --config agent-config.json --json
-# ERROR: missing required template variables: event_name, booth
-# Supply them with: --var event_name=VALUE --var booth=VALUE
+# ERROR: missing required template variables: event_id, event_name, booth
+# Supply them with: --var event_id=VALUE --var event_name=VALUE --var booth=VALUE
 ```
 
 ## Updating agents
