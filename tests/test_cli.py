@@ -431,6 +431,35 @@ def test_init_model_selector(tmp_path, monkeypatch):
     mock_client.list_provider_models.assert_called_once_with("provider-uuid")
 
 
+def test_init_model_selector_fallback_on_error(tmp_path, monkeypatch):
+    """When list_provider_models raises AgentAPIError, init falls back to free-text input."""
+    from algolia_agent.cli import cmd_init
+    from algolia_agent.client import AgentAPIError
+
+    providers = [{"id": "provider-uuid", "name": "hackathon-gemini", "defaultModel": "gemini-2.5-flash"}]
+    inputs = iter([
+        "1",                      # provider choice
+        "gemini-2.5-flash",       # model text input (fallback)
+        "My Agent",
+        "PROMPT.md",
+        "products",
+        "Product catalog.",
+        "N",
+    ])
+    monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
+    mock_client = MagicMock()
+    mock_client.list_providers.return_value = providers
+    mock_client.list_provider_models.side_effect = AgentAPIError(500, "server error")
+    with patch("algolia_agent.cli.AlgoliaAgentClient", return_value=mock_client):
+        with patch("builtins.input", lambda _: next(inputs)):
+            parser = build_parser()
+            args = parser.parse_args(["init", "--output-dir", str(tmp_path)])
+            cmd_init(args)
+
+    config = json.loads((tmp_path / "agent-config.json").read_text())
+    assert config["model"] == "gemini-2.5-flash"
+
+
 def test_init_non_tty_errors(monkeypatch):
     from algolia_agent.cli import cmd_init
     monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: False))

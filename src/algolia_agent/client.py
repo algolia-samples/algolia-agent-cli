@@ -58,7 +58,7 @@ class AlgoliaAgentClient:
 
         self.base_url = f"https://{self.app_id}.algolia.net{self.BASE_PATH}"
 
-    def _request(self, path: str, method: str = "GET", body: dict | None = None) -> dict:
+    def _request(self, path: str, method: str = "GET", body: dict | None = None) -> dict | list:
         url = f"{self.base_url}{path}"
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(url, data=data, method=method)
