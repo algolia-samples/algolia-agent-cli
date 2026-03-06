@@ -90,6 +90,25 @@ def test_list_providers(client):
     assert result == providers
 
 
+def test_list_indices(client):
+    items = [{"name": "products"}, {"name": "products_price_asc"}]
+    with patch("urllib.request.urlopen", return_value=_mock_response({"items": items})):
+        result = client.list_indices()
+    assert result == ["products", "products_price_asc"]
+
+
+def test_list_indices_returns_empty_on_http_error(client):
+    with patch("urllib.request.urlopen", side_effect=_http_error(403)):
+        result = client.list_indices()
+    assert result == []
+
+
+def test_list_indices_returns_empty_on_timeout(client):
+    with patch("urllib.request.urlopen", side_effect=TimeoutError):
+        result = client.list_indices()
+    assert result == []
+
+
 def test_list_provider_models(client):
     models = ["gemini-2.5-flash", "gemini-2.0-flash"]
     with patch("urllib.request.urlopen", return_value=_mock_response(models)):
@@ -240,3 +259,39 @@ def test_retry_after_header_respected(client):
         with patch("time.sleep") as mock_sleep:
             client.get_agent("abc")
     mock_sleep.assert_called_once_with(5.0)
+
+
+def test_timeout_error_raises_clear_message(client):
+    """Bare TimeoutError (Python 3.11+) surfaces a human-readable AgentAPIError."""
+    with patch("urllib.request.urlopen", side_effect=TimeoutError):
+        with patch("time.sleep"):
+            with pytest.raises(AgentAPIError) as exc_info:
+                client.list_agents()
+    assert exc_info.value.status_code == 0
+    assert "timed out" in str(exc_info.value)
+
+
+def test_timeout_error_retries(client):
+    """TimeoutError is retried _MAX_RETRIES times before giving up."""
+    from algolia_agent.client import _MAX_RETRIES
+    call_count = 0
+
+    def counting_urlopen(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise TimeoutError
+
+    with patch("urllib.request.urlopen", side_effect=counting_urlopen):
+        with patch("time.sleep"):
+            with pytest.raises(AgentAPIError):
+                client.list_agents()
+    assert call_count == _MAX_RETRIES
+
+
+def test_timeout_error_retries_then_succeeds(client):
+    """A transient TimeoutError followed by a successful response works."""
+    agent = {"id": "abc", "name": "Test", "status": "draft"}
+    with patch("urllib.request.urlopen", side_effect=[TimeoutError, _mock_response({"data": agent})]):
+        with patch("time.sleep"):
+            result = client.get_agent("abc")
+    assert result == agent

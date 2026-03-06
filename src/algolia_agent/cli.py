@@ -18,6 +18,8 @@ import json
 import sys
 from pathlib import Path
 
+from InquirerPy import inquirer
+
 from .client import AgentAPIError, AlgoliaAgentClient
 from .template import extract_variables, render
 
@@ -101,6 +103,8 @@ def build_tool(config: dict) -> dict:
         "indices": indices,
     }
 
+
+_CHECK = "\033[32m✓\033[0m"  # green checkmark matching InquirerPy's amark style
 
 # ── Output helpers ──────────────────────────────────────────────────────────
 
@@ -195,7 +199,7 @@ def cmd_create(client: AlgoliaAgentClient, args: argparse.Namespace):
         config["instructions"] = "PROMPT.md"
 
     # Validate required fields (pre-rendering)
-    required = ["name", "provider", "model", "instructions", "index"]
+    required = ["name", "provider", "model", "instructions"]
     missing = [k for k in required if not config.get(k)]
     if missing:
         raise SystemExit(
@@ -227,18 +231,23 @@ def cmd_create(client: AlgoliaAgentClient, args: argparse.Namespace):
     # Render instructions with raw values
     instructions = render(instructions_template, variables)
 
-    # Build tool from rendered config
-    tool = build_tool(config)
+    # Build tool from rendered config (only if index is provided)
+    tool = build_tool(config) if config.get("index") else None
 
     if args.dry_run:
         print("=== DRY RUN ===")
         print(f"\nResolved config:")
         dry_config = {k: config[k] for k in required if config.get(k)}
+        if config.get("index"):
+            dry_config["index"] = config["index"]
         if config.get("replicas"):
             dry_config["replicas"] = config["replicas"]
         print(json.dumps(dry_config, indent=2))
-        print(f"\nTool payload:")
-        print(json.dumps(tool, indent=2))
+        if tool:
+            print(f"\nTool payload:")
+            print(json.dumps(tool, indent=2))
+        else:
+            print("\nNo tools configured.")
         print(f"\n--- Rendered instructions ---\n{instructions}")
         return
 
@@ -251,7 +260,7 @@ def cmd_create(client: AlgoliaAgentClient, args: argparse.Namespace):
         "model": config["model"],
         "instructions": instructions,
         "status": "draft",
-        "tools": [tool],
+        "tools": [tool] if tool else [],
     }
     if config.get("config"):
         payload["config"] = config["config"]
@@ -451,20 +460,23 @@ Reply in the user's language, falling back to English.
 """
 
 
+def _select(message: str, choices: list) -> str:
+    """Fuzzy selector: arrow keys to browse, type to filter. Raises SystemExit on cancel."""
+    try:
+        return inquirer.fuzzy(message=message, choices=choices, max_height="40%", border=True, amark="✓").execute()
+    except KeyboardInterrupt:
+        raise SystemExit("Aborted.")
+
+
 def _ask(prompt: str, default: str = "") -> str:
     """Prompt the user for input, showing default in brackets."""
     display = f"{prompt} [{default}]: " if default else f"{prompt}: "
-    val = input(display).strip()
+    try:
+        val = input(display).strip()
+    except KeyboardInterrupt:
+        raise SystemExit("\nAborted.")
     return val or default
 
-
-def _ask_int(prompt: str, choices: list) -> int:
-    """Prompt for a numbered choice; re-prompts on invalid input."""
-    while True:
-        raw = input(f"{prompt}: ").strip()
-        if raw.isdigit() and 1 <= int(raw) <= len(choices):
-            return int(raw) - 1
-        print(f"  Enter a number between 1 and {len(choices)}.")
 
 
 def _resolve_credentials_interactively(args: argparse.Namespace) -> AlgoliaAgentClient:
@@ -499,7 +511,7 @@ def _resolve_credentials_interactively(args: argparse.Namespace) -> AlgoliaAgent
             filtered.append(line)
         filtered += [f"ALGOLIA_APP_ID={app_id}", f"ALGOLIA_API_KEY={api_key}"]
         env_path.write_text("\n".join(filtered) + "\n")
-        print(f"  ✓ .env\n")
+        print(f"{_CHECK} .env\n")
 
     return AlgoliaAgentClient(app_id=app_id, api_key=api_key)
 
@@ -531,13 +543,13 @@ def cmd_init(args: argparse.Namespace):
         raise SystemExit(f"ERROR: {e}")
 
     if not providers:
-        raise SystemExit("ERROR: No providers found. Check your credentials.")
+        raise SystemExit(
+            "No providers found. Set one up in Agent Studio first:\n"
+            "  https://www.algolia.com/doc/guides/algolia-ai/agent-studio/how-to/quickstart"
+        )
 
-    print()
-    for i, p in enumerate(providers, 1):
-        print(f"  [{i}] {p['name']}")
-    provider_idx = _ask_int("\nProvider", providers)
-    provider = providers[provider_idx]
+    provider_name = _select("Select a provider:", [p["name"] for p in providers])
+    provider = next(p for p in providers if p["name"] == provider_name)
 
     models = []
     try:
@@ -546,11 +558,7 @@ def cmd_init(args: argparse.Namespace):
         pass  # fall through to free-text input
 
     if models:
-        print()
-        for i, m in enumerate(models, 1):
-            print(f"  [{i}] {m}")
-        model_idx = _ask_int("\nModel", models)
-        model = models[model_idx]
+        model = _select("Select a model:", models)
     else:
         model = _ask("Model", provider.get("defaultModel") or "")
         if not model:
@@ -559,27 +567,45 @@ def cmd_init(args: argparse.Namespace):
     print()
     name = _ask("Agent name (use {{vars}} for dynamic values)", "My Agent")
     instructions_file = _ask("Instructions file", "PROMPT.md")
-    index = _ask("Primary index name (use {{vars}} for dynamic values)")
-    if not index:
-        raise SystemExit("ERROR: index name is required.")
 
-    index_description = _ask(
-        "Primary index description (use {{vars}} for dynamic values)",
-        f"Search index for {index}.",
+    _NO_INDEX = "<no index — create without tools>"
+    indices = client.list_indices()
+    selection = _select(
+        "Primary index (arrow keys to browse, Enter to select):",
+        [_NO_INDEX] + indices,
     )
+    index = None if selection == _NO_INDEX else selection
 
-    replicas = []
-    while True:
-        print()
-        add = _ask("Add a replica index?", "N")
-        if add.lower() != "y":
-            break
-        replica_index = _ask("  Replica index name")
-        if not replica_index:
-            print("  Skipped (no name given).")
-            continue
-        replica_desc = _ask("  Replica description", replica_index)
-        replicas.append({"index": replica_index, "description": replica_desc})
+    if index:
+        index_description = _ask(
+            "Primary index description (use {{vars}} for dynamic values)",
+            f"Search index for {index}.",
+        )
+        _DONE = "<done — no more replicas>"
+        _CUSTOM_REPLICA = "<custom name>"
+        replicas = []
+        selected_replica_indices: set[str] = set()
+        while True:
+            print()
+            available = [i for i in indices if i != index and i not in selected_replica_indices]
+            selection = _select(
+                "Add a replica index:",
+                [_DONE] + available + [_CUSTOM_REPLICA],
+            )
+            if selection == _DONE:
+                break
+            if selection == _CUSTOM_REPLICA:
+                replica_index = _ask("  Replica index name")
+                if not replica_index:
+                    continue
+            else:
+                replica_index = selection
+                selected_replica_indices.add(replica_index)
+            replica_desc = _ask("  Replica description", f"Replica index of {index_description}")
+            replicas.append({"index": replica_index, "description": replica_desc})
+    else:
+        index_description = None
+        replicas = []
 
     config = {
         "_note": "Generated by algolia-agent init. Use --var key=value to supply template variables.",
@@ -587,9 +613,10 @@ def cmd_init(args: argparse.Namespace):
         "provider": provider["name"],
         "model": model,
         "instructions": instructions_file,
-        "index": index,
-        "index_description": index_description,
     }
+    if index:
+        config["index"] = index
+        config["index_description"] = index_description
     if replicas:
         config["replicas"] = replicas
 
@@ -598,12 +625,12 @@ def cmd_init(args: argparse.Namespace):
     with open(config_path, "w") as f:
         json.dump(config, f, indent=2)
         f.write("\n")
-    print(f"\n  ✓ {config_path}")
+    print(f"\n{_CHECK} {config_path}")
 
     if not prompt_path.exists() or _ask(f"  {prompt_path.name} exists. Overwrite?", "N").lower() == "y":
         with open(prompt_path, "w") as f:
             f.write(_STARTER_PROMPT)
-        print(f"  ✓ {prompt_path}")
+        print(f"{_CHECK} {prompt_path}")
 
     # Identify any template vars across both files
     all_vars = list(dict.fromkeys(
@@ -611,13 +638,11 @@ def cmd_init(args: argparse.Namespace):
         extract_variables(_STARTER_PROMPT)
     ))
 
+    config_flag = f"--config {config_path} " if out_dir != Path(".") else ""
+    var_flags = (" ".join(f"--var {v}=VALUE" for v in all_vars) + " ") if all_vars else ""
     print("\nNext steps:")
     print(f"  1. Edit {prompt_path.name} with your agent instructions")
-    if all_vars:
-        var_flags = " ".join(f"--var {v}=VALUE" for v in all_vars)
-        print(f"  2. Run: algolia-agent create --config {config_path.name} {var_flags}")
-    else:
-        print(f"  2. Run: algolia-agent create --config {config_path.name}")
+    print(f"  2. Run: algolia-agent create {config_flag}{var_flags}".rstrip())
 
 
 # ── Argument parser ──────────────────────────────────────────────────────────
@@ -699,6 +724,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main():
+    try:
+        _main()
+    except KeyboardInterrupt:
+        print("\nAborted.", file=sys.stderr)
+        sys.exit(130)
+
+
+def _main():
     parser = build_parser()
     args = parser.parse_args()
 

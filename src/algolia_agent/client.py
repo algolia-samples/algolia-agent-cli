@@ -94,6 +94,12 @@ class AlgoliaAgentClient:
                     delay *= 2
                     continue
                 raise AgentAPIError(0, f"Connection error: {e.reason}") from e
+            except TimeoutError:
+                if attempt < _MAX_RETRIES - 1:
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                raise AgentAPIError(0, f"Request timed out after {_TIMEOUT}s") from None
 
     def list_agents(self) -> list[dict]:
         result = self._request("/agents")
@@ -106,6 +112,21 @@ class AlgoliaAgentClient:
     def list_providers(self) -> list[dict]:
         result = self._request("/providers")
         return result.get("data", [])
+
+    def list_indices(self) -> list[str]:
+        """Return all index names for this application via the Algolia Search API."""
+        url = f"https://{self.app_id}.algolia.net/1/indexes"
+        req = urllib.request.Request(url)
+        req.add_header("x-algolia-application-id", self.app_id)
+        req.add_header("x-algolia-api-key", self.api_key)
+        req.add_header("Accept", "application/json")
+        req.add_header("User-Agent", "algolia-agent-cli/0.1.0")
+        try:
+            with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+                result = json.loads(resp.read())
+                return [item["name"] for item in result.get("items", [])]
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
+            return []
 
     def list_provider_models(self, provider_id: str) -> list[str]:
         result = self._request(f"/providers/{provider_id}/models")
