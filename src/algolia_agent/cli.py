@@ -458,13 +458,9 @@ Reply in the user's language, falling back to English.
 """
 
 
-def _select(message: str, choices: list, *, allow_filter: bool = False) -> str:
-    """Interactive selector. Uses arrow keys by default; type-to-filter when allow_filter=True.
-    Raises SystemExit if the user cancels (Ctrl+C)."""
-    if allow_filter:
-        result = questionary.autocomplete(message, choices=choices, match_middle=True).ask()
-    else:
-        result = questionary.select(message, choices=choices).ask()
+def _select(message: str, choices: list) -> str:
+    """Inline arrow-key selector. Raises SystemExit if the user cancels (Ctrl+C)."""
+    result = questionary.select(message, choices=choices).ask()
     if result is None:
         raise SystemExit("Aborted.")
     return result
@@ -570,9 +566,8 @@ def cmd_init(args: argparse.Namespace):
     _NO_INDEX = "<no index — create without tools>"
     indices = client.list_indices()
     selection = _select(
-        "Primary index (type to filter or enter a custom name):",
+        "Primary index (arrow keys to browse, Enter to select):",
         indices + [_NO_INDEX],
-        allow_filter=True,
     )
     index = None if selection == _NO_INDEX else selection
 
