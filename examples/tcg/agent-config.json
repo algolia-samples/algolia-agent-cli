@@ -1,0 +1,9 @@
+{
+  "_note": "TCG reference config. name/index/replicas are supplied by create_event_agent.py as CLI flags.",
+  "provider": "hackathon-gemini",
+  "model": "gemini-2.5-flash",
+  "instructions": "PROMPT.md",
+  "config": {
+    "suggestions": { "enabled": true }
+  }
+}
