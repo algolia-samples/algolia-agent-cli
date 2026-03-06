@@ -35,6 +35,7 @@ algolia-agent list                     # List all agents
 algolia-agent get <agent_id>           # Full agent config
 algolia-agent providers                # List available LLM providers
 algolia-agent create [options]         # Create a draft agent
+algolia-agent update <agent_id> [options]  # Update an existing agent
 algolia-agent publish <agent_id>       # Publish a draft agent
 algolia-agent delete <agent_id> --confirm
 ```
@@ -167,6 +168,36 @@ algolia-agent create --config agent-config.json --json
 # ERROR: missing required template variables: event_name, booth
 # Supply them with: --var event_name=VALUE --var booth=VALUE
 ```
+
+## Updating agents
+
+Use `update` to push changes to an existing agent. It fetches the current agent state,
+applies your config/flags on top, and sends a PUT. Fields not specified are preserved
+from the current agent.
+
+```bash
+# Update instructions and re-render template vars
+algolia-agent update <agent_id> \
+    --config agent-config.json \
+    --var event_name="Spring Conference 2026" \
+    --var event_id=spring-2026
+
+# See what would change before updating (dry run)
+algolia-agent update <agent_id> \
+    --config agent-config.json \
+    --var event_name="Spring Conference 2026" \
+    --var event_id=spring-2026 \
+    --dry-run
+
+# Update and publish in one step
+algolia-agent update <agent_id> --config agent-config.json \
+    --var event_name="Spring Conference 2026" \
+    --var event_id=spring-2026 \
+    --publish
+```
+
+The `--dry-run` output shows a diff: which fields changed (name, model, instructions
+line count, index descriptions).
 
 ## Dry run
 

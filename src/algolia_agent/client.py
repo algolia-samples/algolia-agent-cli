@@ -96,6 +96,10 @@ class AlgoliaAgentClient:
         result = self._request("/agents", method="POST", body=payload)
         return result.get("data", result)
 
+    def update_agent(self, agent_id: str, payload: dict) -> dict:
+        result = self._request(f"/agents/{agent_id}", method="PUT", body=payload)
+        return result.get("data", result)
+
     def publish_agent(self, agent_id: str) -> dict:
         result = self._request(f"/agents/{agent_id}/publish", method="POST")
         return result.get("data", result)

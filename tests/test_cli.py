@@ -341,6 +341,211 @@ def test_init_non_tty_errors(monkeypatch):
         cmd_init(MagicMock(output_dir="."))
 
 
+# ── cmd_update ────────────────────────────────────────────────────────────────
+
+def _make_current_agent(name="Old Agent", model="gemini-2.5-flash", instructions="Old instructions."):
+    return {
+        "id": "agent-uuid",
+        "name": name,
+        "model": model,
+        "instructions": instructions,
+        "status": "draft",
+        "providerId": "provider-uuid",
+        "tools": [
+            {
+                "type": "algolia_search_index",
+                "indices": [
+                    {"index": "products", "description": "Product catalog."},
+                    {"index": "products_price_asc", "description": "Sorted by price ascending."},
+                ],
+            }
+        ],
+        "createdAt": "2026-01-01T00:00:00Z",
+        "updatedAt": "2026-01-01T00:00:00Z",
+    }
+
+
+def test_update_dry_run_no_changes(tmp_path, capsys):
+    from algolia_agent.cli import cmd_update
+
+    prompt = tmp_path / "PROMPT.md"
+    prompt.write_text("Old instructions.")
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({
+        "name": "Old Agent",
+        "provider": "hackathon-gemini",
+        "model": "gemini-2.5-flash",
+        "instructions": str(prompt),
+        "index": "products",
+        "index_description": "Product catalog.",
+        "replicas": [{"index": "products_price_asc", "description": "Sorted by price ascending."}],
+    }))
+
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = _make_current_agent()
+    mock_client.resolve_provider_id.return_value = "provider-uuid"
+
+    parser = build_parser()
+    args = parser.parse_args([
+        "update", "agent-uuid",
+        "--config", str(config),
+        "--dry-run",
+    ])
+    cmd_update(mock_client, args)
+
+    out = capsys.readouterr().out
+    assert "DRY RUN" in out
+    assert "No changes" in out
+    mock_client.update_agent.assert_not_called()
+
+
+def test_update_dry_run_shows_changes(tmp_path, capsys):
+    from algolia_agent.cli import cmd_update
+
+    prompt = tmp_path / "PROMPT.md"
+    prompt.write_text("New instructions.")
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({
+        "name": "New Agent Name",
+        "provider": "hackathon-gemini",
+        "model": "gemini-2.5-flash",
+        "instructions": str(prompt),
+        "index": "products",
+        "index_description": "Updated description.",
+    }))
+
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = _make_current_agent()
+    mock_client.resolve_provider_id.return_value = "provider-uuid"
+
+    parser = build_parser()
+    args = parser.parse_args([
+        "update", "agent-uuid",
+        "--config", str(config),
+        "--dry-run",
+    ])
+    cmd_update(mock_client, args)
+
+    out = capsys.readouterr().out
+    assert "DRY RUN" in out
+    assert "New Agent Name" in out or "name" in out
+    mock_client.update_agent.assert_not_called()
+
+
+def test_update_makes_api_call(tmp_path, capsys):
+    from algolia_agent.cli import cmd_update
+
+    prompt = tmp_path / "PROMPT.md"
+    prompt.write_text("Updated instructions.")
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({
+        "name": "Updated Agent",
+        "provider": "hackathon-gemini",
+        "model": "gemini-2.5-flash",
+        "instructions": str(prompt),
+        "index": "products",
+        "index_description": "Product catalog.",
+    }))
+
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = _make_current_agent()
+    mock_client.resolve_provider_id.return_value = "provider-uuid"
+    mock_client.update_agent.return_value = {
+        "id": "agent-uuid",
+        "name": "Updated Agent",
+        "status": "draft",
+    }
+
+    parser = build_parser()
+    args = parser.parse_args([
+        "update", "agent-uuid",
+        "--config", str(config),
+    ])
+    cmd_update(mock_client, args)
+
+    mock_client.update_agent.assert_called_once()
+    call_payload = mock_client.update_agent.call_args[0][1]
+    assert call_payload["name"] == "Updated Agent"
+    assert call_payload["instructions"] == "Updated instructions."
+
+
+def test_update_with_template_vars(tmp_path, capsys):
+    from algolia_agent.cli import cmd_update
+
+    prompt = tmp_path / "PROMPT.md"
+    prompt.write_text("Agent for {{event_name}} at booth {{booth}}.")
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({
+        "name": "Agent for {{event_name}}",
+        "provider": "hackathon-gemini",
+        "model": "gemini-2.5-flash",
+        "instructions": str(prompt),
+        "index": "products_{{event_id}}",
+        "index_description": "Catalog for {{event_name}}.",
+    }))
+
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = _make_current_agent()
+    mock_client.resolve_provider_id.return_value = "provider-uuid"
+    mock_client.update_agent.return_value = {
+        "id": "agent-uuid",
+        "name": "Agent for Spring 2026",
+        "status": "draft",
+    }
+
+    parser = build_parser()
+    args = parser.parse_args([
+        "update", "agent-uuid",
+        "--config", str(config),
+        "--var", "event_name=Spring 2026",
+        "--var", "event_id=spring-2026",
+        "--var", "booth=701",
+    ])
+    cmd_update(mock_client, args)
+
+    call_payload = mock_client.update_agent.call_args[0][1]
+    assert call_payload["name"] == "Agent for Spring 2026"
+    assert "Spring 2026" in call_payload["instructions"]
+    assert call_payload["tools"][0]["indices"][0]["index"] == "products_spring-2026"
+
+
+def test_update_json_output(tmp_path, capsys):
+    from algolia_agent.cli import cmd_update
+
+    prompt = tmp_path / "PROMPT.md"
+    prompt.write_text("Instructions.")
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({
+        "name": "My Agent",
+        "provider": "hackathon-gemini",
+        "model": "gemini-2.5-flash",
+        "instructions": str(prompt),
+        "index": "products",
+        "index_description": "Products.",
+    }))
+
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = _make_current_agent()
+    mock_client.resolve_provider_id.return_value = "provider-uuid"
+    mock_client.update_agent.return_value = {
+        "id": "agent-uuid",
+        "name": "My Agent",
+        "status": "draft",
+    }
+
+    parser = build_parser()
+    args = parser.parse_args([
+        "update", "agent-uuid",
+        "--config", str(config),
+        "--json",
+    ])
+    cmd_update(mock_client, args)
+
+    data = json.loads(capsys.readouterr().out)
+    assert data["id"] == "agent-uuid"
+    assert data["status"] == "draft"
+
+
 # ── Exit codes ────────────────────────────────────────────────────────────────
 
 def test_missing_credentials_exits_1(monkeypatch, capsys):

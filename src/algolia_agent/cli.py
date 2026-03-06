@@ -260,6 +260,148 @@ def cmd_create(client: AlgoliaAgentClient, args: argparse.Namespace):
     print(f"\nTo publish: algolia-agent publish {agent['id']}")
 
 
+def _diff(current: dict, new_payload: dict) -> list[str]:
+    """Return human-readable lines describing what would change."""
+    lines = []
+
+    for field in ("name", "model"):
+        curr = current.get(field, "")
+        new = new_payload.get(field, "")
+        if curr != new:
+            lines.append(f"  {field}: {curr!r} → {new!r}")
+
+    curr_instr = current.get("instructions", "")
+    new_instr = new_payload.get("instructions", "")
+    if curr_instr != new_instr:
+        lines.append(
+            f"  instructions: changed "
+            f"({len(curr_instr.splitlines())} lines → {len(new_instr.splitlines())} lines)"
+        )
+
+    curr_idx = {
+        i["index"]: i.get("description", "")
+        for t in current.get("tools", [])
+        for i in t.get("indices", [])
+    }
+    new_idx = {
+        i["index"]: i.get("description", "")
+        for t in new_payload.get("tools", [])
+        for i in t.get("indices", [])
+    }
+    if curr_idx != new_idx:
+        lines.append("  indices:")
+        for idx in sorted(set(curr_idx) | set(new_idx)):
+            if idx not in curr_idx:
+                lines.append(f"    + {idx!r}: {new_idx[idx]!r}")
+            elif idx not in new_idx:
+                lines.append(f"    - {idx!r}")
+            elif curr_idx[idx] != new_idx[idx]:
+                lines.append(f"    ~ {idx!r}")
+                lines.append(f"        was: {curr_idx[idx]!r}")
+                lines.append(f"        now: {new_idx[idx]!r}")
+
+    return lines
+
+
+def cmd_update(client: AlgoliaAgentClient, args: argparse.Namespace):
+    current = client.get_agent(args.agent_id)
+
+    # Load and merge config; fall back to current agent fields for anything not specified
+    file_config = load_config(args.config) if args.config else {}
+    config = merge_config(file_config, args)
+
+    # Fill in any fields not provided from the current agent state
+    if not config.get("name"):
+        config["name"] = current["name"]
+    if not config.get("model"):
+        config["model"] = current.get("model", "")
+    if not config.get("index"):
+        # Infer from current tools if possible
+        indices = [
+            i["index"]
+            for t in current.get("tools", [])
+            for i in t.get("indices", [])
+        ]
+        if indices:
+            config["index"] = indices[0]
+            config.setdefault("replicas", [
+                {"index": i["index"], "description": i.get("description", i["index"])}
+                for t in current.get("tools", [])
+                for i in t.get("indices", [])[1:]
+            ])
+
+    # Render template vars across config + instructions (if instructions provided)
+    instructions = current.get("instructions", "")
+    if config.get("instructions"):
+        instructions_path = Path(config["instructions"])
+        if not instructions_path.exists() and args.config:
+            instructions_path = Path(args.config).parent / config["instructions"]
+        if instructions_path.exists():
+            instructions_template = instructions_path.read_text()
+            config_json = json.dumps(config)
+            cli_vars = parse_vars(getattr(args, "var", None) or [])
+            variables = resolve_vars(config_json + "\n" + instructions_template, cli_vars)
+            config = json.loads(render(config_json, variables))
+            instructions = render(instructions_template, variables)
+        else:
+            raise SystemExit(f"ERROR: instructions file not found: {config['instructions']}")
+    elif getattr(args, "var", None):
+        # Vars provided but no instructions file — render config only
+        config_json = json.dumps(config)
+        cli_vars = parse_vars(args.var)
+        variables = resolve_vars(config_json, cli_vars)
+        config = json.loads(render(config_json, variables))
+
+    tool = build_tool(config) if config.get("index") else current.get("tools", [{}])[0]
+
+    # Resolve provider: only call API if provider changed
+    current_provider_id = current.get("providerId", "")
+    if config.get("provider"):
+        provider_id = client.resolve_provider_id(config["provider"])
+    else:
+        provider_id = current_provider_id
+
+    new_payload = {
+        "name": config.get("name", current["name"]),
+        "providerId": provider_id,
+        "model": config.get("model", current.get("model", "")),
+        "instructions": instructions,
+        "status": current.get("status", "draft"),
+        "tools": [tool],
+    }
+    cfg_block = config.get("config") or current.get("config")
+    if cfg_block:
+        new_payload["config"] = cfg_block
+
+    if args.dry_run:
+        changes = _diff(current, new_payload)
+        print(f"=== UPDATE DRY RUN: {args.agent_id} ===")
+        print(f"  Agent: {current['name']}")
+        if changes:
+            print("\nChanges:")
+            print("\n".join(changes))
+        else:
+            print("\n  No changes detected.")
+        return
+
+    agent = client.update_agent(args.agent_id, new_payload)
+
+    if args.json:
+        print(json.dumps({"id": agent["id"], "name": agent["name"], "status": agent["status"]}))
+        return
+
+    print(f"Updated agent: {agent['name']}")
+    print(f"Agent ID:      {agent['id']}")
+    print(f"Status:        {agent['status']}")
+
+    if getattr(args, "publish", False):
+        agent = client.publish_agent(args.agent_id)
+        if args.json:
+            print(json.dumps({"id": agent["id"], "name": agent["name"], "status": agent["status"]}))
+        else:
+            print(f"Published:     {agent['status']}")
+
+
 def cmd_publish(client: AlgoliaAgentClient, args: argparse.Namespace):
     agent = client.publish_agent(args.agent_id)
     if args.json:
@@ -487,6 +629,24 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Show resolved config and rendered instructions; no API call")
     create_p.add_argument("--json", action="store_true", help="Output JSON")
 
+    # update
+    update_p = sub.add_parser("update", help="Update an existing agent")
+    update_p.add_argument("agent_id", help="Agent ID (UUID)")
+    update_p.add_argument("--config", metavar="FILE", help="Path to agent-config.json")
+    update_p.add_argument("--name", help="New agent name")
+    update_p.add_argument("--provider", help="New provider name")
+    update_p.add_argument("--model", help="New model name")
+    update_p.add_argument("--instructions", metavar="FILE", help="Path to instructions file")
+    update_p.add_argument("--index", help="New primary index name")
+    update_p.add_argument("--replica", metavar="INDEX", action="append")
+    update_p.add_argument("--var", metavar="KEY=VALUE", action="append",
+                          help="Template variable substitution (repeatable)")
+    update_p.add_argument("--publish", action="store_true",
+                          help="Publish the agent after updating")
+    update_p.add_argument("--dry-run", action="store_true",
+                          help="Show what would change without making API calls")
+    update_p.add_argument("--json", action="store_true", help="Output JSON")
+
     # publish
     pub_p = sub.add_parser("publish", help="Publish a draft agent")
     pub_p.add_argument("agent_id", help="Agent ID (UUID)")
@@ -542,6 +702,8 @@ def main():
             cmd_providers(client, args)
         elif args.command == "create":
             cmd_create(client, args)
+        elif args.command == "update":
+            cmd_update(client, args)
         elif args.command == "publish":
             cmd_publish(client, args)
         elif args.command == "delete":
