@@ -18,7 +18,7 @@ import json
 import sys
 from pathlib import Path
 
-from pick import pick
+import questionary
 
 from .client import AgentAPIError, AlgoliaAgentClient
 from .template import extract_variables, render
@@ -458,6 +458,18 @@ Reply in the user's language, falling back to English.
 """
 
 
+def _select(message: str, choices: list, *, allow_filter: bool = False) -> str:
+    """Interactive selector. Uses arrow keys by default; type-to-filter when allow_filter=True.
+    Raises SystemExit if the user cancels (Ctrl+C)."""
+    if allow_filter:
+        result = questionary.autocomplete(message, choices=choices, match_middle=True).ask()
+    else:
+        result = questionary.select(message, choices=choices).ask()
+    if result is None:
+        raise SystemExit("Aborted.")
+    return result
+
+
 def _ask(prompt: str, default: str = "") -> str:
     """Prompt the user for input, showing default in brackets."""
     display = f"{prompt} [{default}]: " if default else f"{prompt}: "
@@ -535,8 +547,8 @@ def cmd_init(args: argparse.Namespace):
             "  https://www.algolia.com/doc/guides/algolia-ai/agent-studio/how-to/quickstart"
         )
 
-    _, provider_idx = pick([p["name"] for p in providers], "Select a provider:")
-    provider = providers[provider_idx]
+    provider_name = _select("Select a provider:", [p["name"] for p in providers])
+    provider = next(p for p in providers if p["name"] == provider_name)
 
     models = []
     try:
@@ -545,7 +557,7 @@ def cmd_init(args: argparse.Namespace):
         pass  # fall through to free-text input
 
     if models:
-        model, _ = pick(models, "Select a model:")
+        model = _select("Select a model:", models)
     else:
         model = _ask("Model", provider.get("defaultModel") or "")
         if not model:
@@ -555,21 +567,14 @@ def cmd_init(args: argparse.Namespace):
     name = _ask("Agent name (use {{vars}} for dynamic values)", "My Agent")
     instructions_file = _ask("Instructions file", "PROMPT.md")
 
-    _CUSTOM = "<custom name>"
     _NO_INDEX = "<no index — create without tools>"
     indices = client.list_indices()
-    if indices:
-        selection, _ = pick(indices + [_CUSTOM, _NO_INDEX], "Select a primary index:")
-        if selection == _NO_INDEX:
-            index = None
-        elif selection == _CUSTOM:
-            index = _ask("  Index name (use {{vars}} for dynamic values)")
-            if not index:
-                raise SystemExit("ERROR: index name is required.")
-        else:
-            index = selection
-    else:
-        index = _ask("Primary index name (leave blank to skip tools)") or None
+    selection = _select(
+        "Primary index (type to filter or enter a custom name):",
+        indices + [_NO_INDEX],
+        allow_filter=True,
+    )
+    index = None if selection == _NO_INDEX else selection
 
     if index:
         index_description = _ask(
