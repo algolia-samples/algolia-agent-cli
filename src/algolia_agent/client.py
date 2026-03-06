@@ -64,7 +64,8 @@ class AlgoliaAgentClient:
         req.add_header("User-Agent", "algolia-agent-cli/0.1.0")
         try:
             with urllib.request.urlopen(req) as resp:
-                return json.loads(resp.read())
+                body = resp.read()
+                return json.loads(body) if body else {}
         except urllib.error.HTTPError as e:
             body_text = e.read().decode(errors="replace")
             raise AgentAPIError(e.code, body_text) from e
