@@ -461,7 +461,7 @@ Reply in the user's language, falling back to English.
 def _select(message: str, choices: list) -> str:
     """Fuzzy selector: arrow keys to browse, type to filter. Raises SystemExit on cancel."""
     try:
-        return inquirer.fuzzy(message=message, choices=choices, max_height="40%").execute()
+        return inquirer.fuzzy(message=message, choices=choices, max_height="40%", info=False).execute()
     except KeyboardInterrupt:
         raise SystemExit("Aborted.")
 
