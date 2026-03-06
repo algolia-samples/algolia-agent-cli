@@ -461,7 +461,7 @@ Reply in the user's language, falling back to English.
 def _select(message: str, choices: list) -> str:
     """Fuzzy selector: arrow keys to browse, type to filter. Raises SystemExit on cancel."""
     try:
-        return inquirer.fuzzy(message=message, choices=choices, max_height="40%", border=True).execute()
+        return inquirer.fuzzy(message=message, choices=choices, max_height="40%", border=True, amark="✓").execute()
     except KeyboardInterrupt:
         raise SystemExit("Aborted.")
 
@@ -506,7 +506,7 @@ def _resolve_credentials_interactively(args: argparse.Namespace) -> AlgoliaAgent
             filtered.append(line)
         filtered += [f"ALGOLIA_APP_ID={app_id}", f"ALGOLIA_API_KEY={api_key}"]
         env_path.write_text("\n".join(filtered) + "\n")
-        print(f"  ✓ .env\n")
+        print(f"✓ .env\n")
 
     return AlgoliaAgentClient(app_id=app_id, api_key=api_key)
 
@@ -620,12 +620,12 @@ def cmd_init(args: argparse.Namespace):
     with open(config_path, "w") as f:
         json.dump(config, f, indent=2)
         f.write("\n")
-    print(f"\n  ✓ {config_path}")
+    print(f"\n✓ {config_path}")
 
     if not prompt_path.exists() or _ask(f"  {prompt_path.name} exists. Overwrite?", "N").lower() == "y":
         with open(prompt_path, "w") as f:
             f.write(_STARTER_PROMPT)
-        print(f"  ✓ {prompt_path}")
+        print(f"✓ {prompt_path}")
 
     # Identify any template vars across both files
     all_vars = list(dict.fromkeys(
