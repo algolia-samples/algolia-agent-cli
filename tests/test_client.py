@@ -137,6 +137,14 @@ def test_create_agent(client):
     assert result == agent
 
 
+def test_update_agent(client):
+    agent = {"id": "abc", "name": "Updated Agent", "status": "draft"}
+    with patch("urllib.request.urlopen", return_value=_mock_response({"data": agent})) as mock_urlopen:
+        result = client.update_agent("abc", {"name": "Updated Agent"})
+    assert result == agent
+    assert mock_urlopen.call_args[0][0].method == "PATCH"
+
+
 def test_publish_agent(client):
     agent = {"id": "abc", "name": "My Agent", "status": "published"}
     with patch("urllib.request.urlopen", return_value=_mock_response({"data": agent})):
