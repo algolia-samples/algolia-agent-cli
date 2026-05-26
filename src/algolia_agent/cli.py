@@ -103,7 +103,8 @@ def build_tool(config: dict) -> dict:
         "indices": indices,
     }
     if "searchControls" in config:
-        tool["searchControls"] = config["searchControls"]
+        for idx in tool["indices"]:
+            idx["searchControls"] = config["searchControls"]
     if "predefinedSearchParameters" in config:
         tool["predefinedSearchParameters"] = config["predefinedSearchParameters"]
     return tool
@@ -300,8 +301,14 @@ def _diff(current: dict, new_payload: dict) -> list[str]:
             f"({len(curr_instr.splitlines())} lines → {len(new_instr.splitlines())} lines)"
         )
 
-    curr_sc = next((t["searchControls"] for t in current.get("tools", []) if "searchControls" in t), None)
-    new_sc = next((t["searchControls"] for t in new_payload.get("tools", []) if "searchControls" in t), None)
+    curr_sc = next(
+        (i.get("searchControls") for t in current.get("tools", []) for i in t.get("indices", [])),
+        None,
+    )
+    new_sc = next(
+        (i.get("searchControls") for t in new_payload.get("tools", []) for i in t.get("indices", [])),
+        None,
+    )
     if curr_sc != new_sc:
         lines.append(f"  searchControls: {json.dumps(curr_sc)} → {json.dumps(new_sc)}")
 

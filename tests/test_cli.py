@@ -756,7 +756,9 @@ def test_build_tool_with_search_controls():
         "searchControls": search_controls,
     }
     tool = build_tool(config)
-    assert tool["searchControls"] == search_controls
+    assert "searchControls" not in tool  # not at tool level
+    for idx in tool["indices"]:
+        assert idx["searchControls"] == search_controls
     assert "predefinedSearchParameters" not in tool
 
 
@@ -767,8 +769,9 @@ def test_build_tool_with_empty_search_controls():
         "searchControls": {},
     }
     tool = build_tool(config)
-    assert "searchControls" in tool
-    assert tool["searchControls"] == {}
+    assert "searchControls" not in tool  # not at tool level
+    for idx in tool["indices"]:
+        assert idx["searchControls"] == {}
 
 
 def test_build_tool_with_predefined_search_parameters():
@@ -784,21 +787,18 @@ def test_build_tool_with_predefined_search_parameters():
 
 
 def test_diff_detects_search_controls_change():
+    sc = {"hitsPerPage": {"exposed": True, "default": 5, "constraint": {"max": 5}}}
     current = {
         "name": "My Agent",
         "model": "gemini-2.5-flash",
         "instructions": "Hello.",
-        "tools": [{"type": "algolia_search_index", "indices": [{"index": "products", "description": "Catalog."}]}],
+        "tools": [{"type": "algolia_search_index", "indices": [{"index": "products", "description": "Catalog.", "searchControls": None}]}],
     }
     new_payload = {
         "name": "My Agent",
         "model": "gemini-2.5-flash",
         "instructions": "Hello.",
-        "tools": [{
-            "type": "algolia_search_index",
-            "indices": [{"index": "products", "description": "Catalog."}],
-            "searchControls": {"hitsPerPage": {"exposed": True, "default": 5, "constraint": {"max": 5}}},
-        }],
+        "tools": [{"type": "algolia_search_index", "indices": [{"index": "products", "description": "Catalog.", "searchControls": sc}]}],
     }
     changes = _diff(current, new_payload)
     assert len(changes) == 1
@@ -812,7 +812,7 @@ def test_diff_no_change_when_search_controls_equal():
         "name": "My Agent",
         "model": "gemini-2.5-flash",
         "instructions": "Hello.",
-        "tools": [{"type": "algolia_search_index", "indices": [], "searchControls": sc}],
+        "tools": [{"type": "algolia_search_index", "indices": [{"index": "products", "searchControls": sc}]}],
     }
     changes = _diff(agent, dict(agent))
     assert not changes
