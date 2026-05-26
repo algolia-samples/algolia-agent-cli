@@ -774,6 +774,24 @@ def test_build_tool_with_empty_search_controls():
         assert idx["searchControls"] == {}
 
 
+def test_build_tool_with_search_controls_applies_to_all_indices():
+    sc = {"hitsPerPage": {"exposed": True, "default": 5, "constraint": {"max": 5}}}
+    config = {
+        "index": "products",
+        "index_description": "Product catalog.",
+        "replicas": [
+            {"index": "products_price_asc", "description": "Ascending price."},
+            {"index": "products_price_desc", "description": "Descending price."},
+        ],
+        "searchControls": sc,
+    }
+    tool = build_tool(config)
+    assert len(tool["indices"]) == 3
+    assert "searchControls" not in tool
+    for idx in tool["indices"]:
+        assert idx["searchControls"] == sc
+
+
 def test_build_tool_with_predefined_search_parameters():
     params = {"filters": "status:active", "analytics": True}
     config = {
@@ -816,3 +834,26 @@ def test_diff_no_change_when_search_controls_equal():
     }
     changes = _diff(agent, dict(agent))
     assert not changes
+
+
+def test_diff_detects_search_controls_change_on_replica():
+    sc = {"hitsPerPage": {"exposed": True, "default": 5, "constraint": {"max": 5}}}
+    indices_without_sc = [
+        {"index": "products", "description": "Catalog.", "searchControls": None},
+        {"index": "products_price_asc", "description": "Asc.", "searchControls": None},
+    ]
+    indices_with_sc = [
+        {"index": "products", "description": "Catalog.", "searchControls": sc},
+        {"index": "products_price_asc", "description": "Asc.", "searchControls": sc},
+    ]
+    current = {
+        "name": "My Agent", "model": "gemini-2.5-flash", "instructions": "Hello.",
+        "tools": [{"type": "algolia_search_index", "indices": indices_without_sc}],
+    }
+    new_payload = {
+        "name": "My Agent", "model": "gemini-2.5-flash", "instructions": "Hello.",
+        "tools": [{"type": "algolia_search_index", "indices": indices_with_sc}],
+    }
+    changes = _diff(current, new_payload)
+    assert len(changes) == 1
+    assert "searchControls" in changes[0]

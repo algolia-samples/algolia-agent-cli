@@ -301,16 +301,20 @@ def _diff(current: dict, new_payload: dict) -> list[str]:
             f"({len(curr_instr.splitlines())} lines → {len(new_instr.splitlines())} lines)"
         )
 
-    curr_sc = next(
-        (i.get("searchControls") for t in current.get("tools", []) for i in t.get("indices", [])),
-        None,
-    )
-    new_sc = next(
-        (i.get("searchControls") for t in new_payload.get("tools", []) for i in t.get("indices", [])),
-        None,
-    )
-    if curr_sc != new_sc:
-        lines.append(f"  searchControls: {json.dumps(curr_sc)} → {json.dumps(new_sc)}")
+    curr_sc_map = {
+        i["index"]: i.get("searchControls")
+        for t in current.get("tools", [])
+        for i in t.get("indices", [])
+    }
+    new_sc_map = {
+        i["index"]: i.get("searchControls")
+        for t in new_payload.get("tools", [])
+        for i in t.get("indices", [])
+    }
+    if curr_sc_map != new_sc_map:
+        curr_repr = json.dumps(next(iter(curr_sc_map.values()), None))
+        new_repr = json.dumps(next(iter(new_sc_map.values()), None))
+        lines.append(f"  searchControls: {curr_repr} → {new_repr}")
 
     curr_idx = {
         i["index"]: i.get("description", "")
