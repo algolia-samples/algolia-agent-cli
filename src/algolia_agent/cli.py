@@ -102,9 +102,9 @@ def build_tool(config: dict) -> dict:
         "type": "algolia_search_index",
         "indices": indices,
     }
-    if config.get("searchControls"):
+    if "searchControls" in config:
         tool["searchControls"] = config["searchControls"]
-    if config.get("predefinedSearchParameters"):
+    if "predefinedSearchParameters" in config:
         tool["predefinedSearchParameters"] = config["predefinedSearchParameters"]
     return tool
 
@@ -300,8 +300,8 @@ def _diff(current: dict, new_payload: dict) -> list[str]:
             f"({len(curr_instr.splitlines())} lines → {len(new_instr.splitlines())} lines)"
         )
 
-    curr_sc = next((t.get("searchControls") for t in current.get("tools", [])), None)
-    new_sc = next((t.get("searchControls") for t in new_payload.get("tools", [])), None)
+    curr_sc = next((t["searchControls"] for t in current.get("tools", []) if "searchControls" in t), None)
+    new_sc = next((t["searchControls"] for t in new_payload.get("tools", []) if "searchControls" in t), None)
     if curr_sc != new_sc:
         lines.append(f"  searchControls: {json.dumps(curr_sc)} → {json.dumps(new_sc)}")
 

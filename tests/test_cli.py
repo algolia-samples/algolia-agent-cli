@@ -760,6 +760,17 @@ def test_build_tool_with_search_controls():
     assert "predefinedSearchParameters" not in tool
 
 
+def test_build_tool_with_empty_search_controls():
+    config = {
+        "index": "products",
+        "index_description": "Product catalog.",
+        "searchControls": {},
+    }
+    tool = build_tool(config)
+    assert "searchControls" in tool
+    assert tool["searchControls"] == {}
+
+
 def test_build_tool_with_predefined_search_parameters():
     params = {"filters": "status:active", "analytics": True}
     config = {
