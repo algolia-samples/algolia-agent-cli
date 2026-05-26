@@ -97,11 +97,16 @@ def build_tool(config: dict) -> dict:
     for r in config.get("replicas", []):
         indices.append(_index_entry(r))
 
-    return {
+    tool = {
         "name": "algolia_search_index",
         "type": "algolia_search_index",
         "indices": indices,
     }
+    if config.get("searchControls"):
+        tool["searchControls"] = config["searchControls"]
+    if config.get("predefinedSearchParameters"):
+        tool["predefinedSearchParameters"] = config["predefinedSearchParameters"]
+    return tool
 
 
 _CHECK = "\033[32m✓\033[0m"  # green checkmark matching InquirerPy's amark style
@@ -294,6 +299,11 @@ def _diff(current: dict, new_payload: dict) -> list[str]:
             f"  instructions: changed "
             f"({len(curr_instr.splitlines())} lines → {len(new_instr.splitlines())} lines)"
         )
+
+    curr_sc = next((t.get("searchControls") for t in current.get("tools", [])), None)
+    new_sc = next((t.get("searchControls") for t in new_payload.get("tools", [])), None)
+    if curr_sc != new_sc:
+        lines.append(f"  searchControls: {json.dumps(curr_sc)} → {json.dumps(new_sc)}")
 
     curr_idx = {
         i["index"]: i.get("description", "")
