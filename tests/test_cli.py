@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from algolia_agent.cli import build_parser, load_config, merge_config, parse_vars, resolve_vars
+from algolia_agent.cli import build_parser, build_tool, load_config, merge_config, parse_vars, resolve_vars, _diff
 
 
 # ── load_config ──────────────────────────────────────────────────────────────
@@ -726,3 +726,93 @@ def test_missing_credentials_exits_1(monkeypatch, capsys):
             with pytest.raises(SystemExit) as exc_info:
                 main()
     assert exc_info.value.code == 1
+
+
+# ── build_tool / searchControls ───────────────────────────────────────────────
+
+def test_build_tool_without_search_controls():
+    config = {
+        "index": "products",
+        "index_description": "Product catalog.",
+    }
+    tool = build_tool(config)
+    assert tool == {
+        "name": "algolia_search_index",
+        "type": "algolia_search_index",
+        "indices": [{"index": "products", "description": "Product catalog."}],
+    }
+    assert "searchControls" not in tool
+    assert "predefinedSearchParameters" not in tool
+
+
+def test_build_tool_with_search_controls():
+    search_controls = {
+        "hitsPerPage": {"exposed": True, "default": 5, "constraint": {"max": 5}},
+        "attributesToRetrieve": {"exposed": False, "default": ["name", "price"]},
+    }
+    config = {
+        "index": "products",
+        "index_description": "Product catalog.",
+        "searchControls": search_controls,
+    }
+    tool = build_tool(config)
+    assert tool["searchControls"] == search_controls
+    assert "predefinedSearchParameters" not in tool
+
+
+def test_build_tool_with_empty_search_controls():
+    config = {
+        "index": "products",
+        "index_description": "Product catalog.",
+        "searchControls": {},
+    }
+    tool = build_tool(config)
+    assert "searchControls" in tool
+    assert tool["searchControls"] == {}
+
+
+def test_build_tool_with_predefined_search_parameters():
+    params = {"filters": "status:active", "analytics": True}
+    config = {
+        "index": "products",
+        "index_description": "Product catalog.",
+        "predefinedSearchParameters": params,
+    }
+    tool = build_tool(config)
+    assert tool["predefinedSearchParameters"] == params
+    assert "searchControls" not in tool
+
+
+def test_diff_detects_search_controls_change():
+    current = {
+        "name": "My Agent",
+        "model": "gemini-2.5-flash",
+        "instructions": "Hello.",
+        "tools": [{"type": "algolia_search_index", "indices": [{"index": "products", "description": "Catalog."}]}],
+    }
+    new_payload = {
+        "name": "My Agent",
+        "model": "gemini-2.5-flash",
+        "instructions": "Hello.",
+        "tools": [{
+            "type": "algolia_search_index",
+            "indices": [{"index": "products", "description": "Catalog."}],
+            "searchControls": {"hitsPerPage": {"exposed": True, "default": 5, "constraint": {"max": 5}}},
+        }],
+    }
+    changes = _diff(current, new_payload)
+    assert len(changes) == 1
+    assert "searchControls" in changes[0]
+    assert "null" in changes[0]  # current had no searchControls
+
+
+def test_diff_no_change_when_search_controls_equal():
+    sc = {"hitsPerPage": {"exposed": True, "default": 5, "constraint": {"max": 5}}}
+    agent = {
+        "name": "My Agent",
+        "model": "gemini-2.5-flash",
+        "instructions": "Hello.",
+        "tools": [{"type": "algolia_search_index", "indices": [], "searchControls": sc}],
+    }
+    changes = _diff(agent, dict(agent))
+    assert not changes
