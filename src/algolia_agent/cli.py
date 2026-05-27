@@ -304,26 +304,42 @@ def _diff(current: dict, new_payload: dict) -> list[str]:
     # Only compare keys present in the new payload — the API expands searchControls
     # with default fields (query, page, responseFields, etc.) that we never sent,
     # which would otherwise cause a spurious diff on every dry-run.
-    new_sc_keys = {
-        k
+    # Skip comparison entirely when no index in the new payload carries a searchControls key.
+    new_has_sc = any(
+        "searchControls" in i
         for t in new_payload.get("tools", [])
         for i in t.get("indices", [])
-        for k in (i.get("searchControls") or {})
-    }
-    curr_sc_map = {
-        i["index"]: {k: v for k, v in (i.get("searchControls") or {}).items() if k in new_sc_keys}
-        for t in current.get("tools", [])
-        for i in t.get("indices", [])
-    }
-    new_sc_map = {
-        i["index"]: (i.get("searchControls") or {})
-        for t in new_payload.get("tools", [])
-        for i in t.get("indices", [])
-    }
-    if curr_sc_map != new_sc_map:
-        curr_repr = json.dumps(next(iter(curr_sc_map.values()), None))
-        new_repr = json.dumps(next(iter(new_sc_map.values()), None))
-        lines.append(f"  searchControls: {curr_repr} → {new_repr}")
+    )
+    if new_has_sc:
+        new_sc_keys = {
+            k
+            for t in new_payload.get("tools", [])
+            for i in t.get("indices", [])
+            for k in (i.get("searchControls") or {})
+        }
+        if new_sc_keys:
+            # Filter current to only the keys we're sending, ignoring API-expanded defaults.
+            curr_sc_map = {
+                i["index"]: {k: v for k, v in (i.get("searchControls") or {}).items() if k in new_sc_keys}
+                for t in current.get("tools", [])
+                for i in t.get("indices", [])
+            }
+        else:
+            # New payload sends searchControls: {} — compare unfiltered so clearing is detected.
+            curr_sc_map = {
+                i["index"]: (i.get("searchControls") or {})
+                for t in current.get("tools", [])
+                for i in t.get("indices", [])
+            }
+        new_sc_map = {
+            i["index"]: (i.get("searchControls") or {})
+            for t in new_payload.get("tools", [])
+            for i in t.get("indices", [])
+        }
+        if curr_sc_map != new_sc_map:
+            curr_repr = json.dumps(next(iter(curr_sc_map.values()), None))
+            new_repr = json.dumps(next(iter(new_sc_map.values()), None))
+            lines.append(f"  searchControls: {curr_repr} → {new_repr}")
 
     curr_idx = {
         i["index"]: i.get("description", "")
@@ -645,20 +661,26 @@ def cmd_init(args: argparse.Namespace):
         search_controls: dict = {}
         print()
         if _ask("Set up searchControls to limit hits or restrict attributes?", "N").lower() == "y":
-            max_hits = _ask("  Cap hitsPerPage? Enter max (or leave blank to skip)")
-            if max_hits:
+            while True:
+                max_hits = _ask("  Cap hitsPerPage? Enter max (or leave blank to skip)")
+                if not max_hits:
+                    break
                 try:
                     n = int(max_hits)
                     search_controls["hitsPerPage"] = {"exposed": False, "default": n, "constraint": {"max": n}}
+                    break
                 except ValueError:
-                    pass
-            max_page = _ask("  Cap page? Enter max (or leave blank to skip)")
-            if max_page:
+                    print("  Please enter a whole number.")
+            while True:
+                max_page = _ask("  Cap page? Enter max (or leave blank to skip)")
+                if not max_page:
+                    break
                 try:
                     n = int(max_page)
                     search_controls["page"] = {"exposed": False, "default": 0, "constraint": {"max": n}}
+                    break
                 except ValueError:
-                    pass
+                    print("  Please enter a whole number.")
             attrs_raw = _ask("  Restrict attributesToRetrieve? Enter comma-separated list (or leave blank to skip)")
             if attrs_raw:
                 attrs = [a.strip() for a in attrs_raw.split(",") if a.strip()]

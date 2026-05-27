@@ -947,3 +947,19 @@ def test_diff_detects_change_despite_api_expansion():
     changes = _diff(current, new_payload)
     assert len(changes) == 1
     assert "searchControls" in changes[0]
+
+
+def test_diff_detects_clearing_search_controls():
+    """Sending searchControls: {} when current has non-empty controls is reported as a change."""
+    sc_existing = {"hitsPerPage": {"exposed": False, "default": 10, "constraint": {"max": 10}}}
+    current = {
+        "name": "My Agent", "model": "gemini-2.5-flash", "instructions": "Hello.",
+        "tools": [{"type": "algolia_search_index", "indices": [{"index": "products", "searchControls": sc_existing}]}],
+    }
+    new_payload = {
+        "name": "My Agent", "model": "gemini-2.5-flash", "instructions": "Hello.",
+        "tools": [{"type": "algolia_search_index", "indices": [{"index": "products", "searchControls": {}}]}],
+    }
+    changes = _diff(current, new_payload)
+    assert len(changes) == 1
+    assert "searchControls" in changes[0]
