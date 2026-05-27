@@ -111,9 +111,29 @@ and the instructions file in a single pass — missing vars are reported togethe
   ],
   "config": {
     "suggestions": { "enabled": true }
+  },
+  "searchControls": {
+    "hitsPerPage": {
+      "exposed": true,
+      "default": 5,
+      "constraint": { "max": 5 }
+    },
+    "attributesToRetrieve": {
+      "exposed": false,
+      "default": ["objectID", "name", "price", "image_url"]
+    }
   }
 }
 ```
+
+`searchControls` constrains what the LLM can do at query time. It is applied to every index (primary + replicas). Common fields:
+
+| Field | What it does |
+|---|---|
+| `hitsPerPage` | Limit result count. Set `constraint.max` to cap it regardless of what the LLM requests. |
+| `attributesToRetrieve` | Restrict which attributes are returned in each hit. Useful for limiting the payload to only the fields the LLM actually needs. |
+
+Set `exposed: true` to let the LLM vary the value within the constraint; `exposed: false` to fix it.
 
 ```bash
 algolia-agent create \
