@@ -285,8 +285,8 @@ def test_init_writes_config_and_prompt(tmp_path, monkeypatch):
     from algolia_agent.cli import cmd_init
 
     providers = [{"id": "uuid", "name": "hackathon-gemini", "defaultModel": "gemini-2.5-flash"}]
-    # _select: provider, index, replica(done). input: model (text fallback), name, instructions, description
-    inputs = iter(["gemini-2.5-flash", "My Agent", "PROMPT.md", "Main product catalog."])
+    # _select: provider, index, replica(done). input: model (text fallback), name, instructions, description, searchControls(skip)
+    inputs = iter(["gemini-2.5-flash", "My Agent", "PROMPT.md", "Main product catalog.", "N"])
     monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
     with _mock_init_client(providers):
         with _mock_select(["hackathon-gemini", "products", "<done — no more replicas>"]):
@@ -310,6 +310,7 @@ def test_init_with_replicas(tmp_path, monkeypatch):
         "gemini-2.5-flash", "My Agent", "PROMPT.md",
         "Product catalog.",
         "products_{{event_id}}_price_asc", "Sorted by price asc.",
+        "N",
     ])
     monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
     with _mock_init_client(providers):
@@ -327,8 +328,8 @@ def test_init_prompts_for_missing_credentials(tmp_path, monkeypatch):
     from algolia_agent.cli import cmd_init
 
     providers = [{"id": "uuid", "name": "hackathon-gemini", "defaultModel": "gemini-2.5-flash"}]
-    # input: app_id, save_to_env, model (text), name, instructions, description
-    inputs = iter(["MYAPPID", "n", "gemini-2.5-flash", "My Agent", "PROMPT.md", "Product catalog."])
+    # input: app_id, save_to_env, model (text), name, instructions, description, searchControls(skip)
+    inputs = iter(["MYAPPID", "n", "gemini-2.5-flash", "My Agent", "PROMPT.md", "Product catalog.", "N"])
     monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
     monkeypatch.delenv("ALGOLIA_APP_ID", raising=False)
     monkeypatch.delenv("ALGOLIA_API_KEY", raising=False)
@@ -354,7 +355,7 @@ def test_init_saves_credentials_to_dotenv(tmp_path, monkeypatch):
     from algolia_agent.cli import cmd_init
 
     providers = [{"id": "uuid", "name": "hackathon-gemini", "defaultModel": "gemini-2.5-flash"}]
-    inputs = iter(["MYAPPID", "Y", "gemini-2.5-flash", "My Agent", "PROMPT.md", "Product catalog."])
+    inputs = iter(["MYAPPID", "Y", "gemini-2.5-flash", "My Agent", "PROMPT.md", "Product catalog.", "N"])
     monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
     monkeypatch.delenv("ALGOLIA_APP_ID", raising=False)
     monkeypatch.delenv("ALGOLIA_API_KEY", raising=False)
@@ -380,7 +381,7 @@ def test_init_model_selector(tmp_path, monkeypatch):
     from algolia_agent.cli import cmd_init
 
     providers = [{"id": "provider-uuid", "name": "hackathon-gemini"}]
-    inputs = iter(["My Agent", "PROMPT.md", "Main product catalog."])
+    inputs = iter(["My Agent", "PROMPT.md", "Main product catalog.", "N"])
     monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
     mock_client = MagicMock()
     mock_client.list_providers.return_value = providers
@@ -401,7 +402,7 @@ def test_init_index_selector_existing(tmp_path, monkeypatch):
     from algolia_agent.cli import cmd_init
 
     providers = [{"id": "provider-uuid", "name": "hackathon-gemini"}]
-    inputs = iter(["My Agent", "PROMPT.md", "Product catalog."])
+    inputs = iter(["My Agent", "PROMPT.md", "Product catalog.", "N"])
     monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
     mock_client = MagicMock()
     mock_client.list_providers.return_value = providers
@@ -421,7 +422,7 @@ def test_init_index_selector_custom(tmp_path, monkeypatch):
     from algolia_agent.cli import cmd_init
 
     providers = [{"id": "provider-uuid", "name": "hackathon-gemini"}]
-    inputs = iter(["My Agent", "PROMPT.md", "Product catalog."])
+    inputs = iter(["My Agent", "PROMPT.md", "Product catalog.", "N"])
     monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
     mock_client = MagicMock()
     mock_client.list_providers.return_value = providers
@@ -485,7 +486,7 @@ def test_init_model_selector_fallback_on_error(tmp_path, monkeypatch):
     from algolia_agent.client import AgentAPIError
 
     providers = [{"id": "provider-uuid", "name": "hackathon-gemini", "defaultModel": "gemini-2.5-flash"}]
-    inputs = iter(["gemini-2.5-flash", "My Agent", "PROMPT.md", "Product catalog."])
+    inputs = iter(["gemini-2.5-flash", "My Agent", "PROMPT.md", "Product catalog.", "N"])
     monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
     mock_client = MagicMock()
     mock_client.list_providers.return_value = providers
@@ -505,6 +506,51 @@ def test_init_non_tty_errors(monkeypatch):
     monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: False))
     with pytest.raises(SystemExit, match="interactive terminal"):
         cmd_init(MagicMock(output_dir="."))
+
+
+def test_init_with_search_controls(tmp_path, monkeypatch):
+    """Full searchControls walkthrough writes all specified controls to the config."""
+    from algolia_agent.cli import cmd_init
+
+    providers = [{"id": "uuid", "name": "hackathon-gemini", "defaultModel": "gemini-2.5-flash"}]
+    inputs = iter([
+        "gemini-2.5-flash", "My Agent", "PROMPT.md", "Product catalog.",
+        "y",          # set up searchControls?
+        "10",         # hitsPerPage max
+        "5",          # page max
+        "title, price",  # attributesToRetrieve
+        "brand, category",  # facets
+        "hits, nbHits",  # responseFields
+    ])
+    monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
+    with _mock_init_client(providers):
+        with _mock_select(["hackathon-gemini", "products", "<done — no more replicas>"]):
+            with patch("builtins.input", lambda _: next(inputs)):
+                cmd_init(build_parser().parse_args(["init", "--output-dir", str(tmp_path)]))
+
+    config = json.loads((tmp_path / "agent-config.json").read_text())
+    sc = config["searchControls"]
+    assert sc["hitsPerPage"] == {"exposed": False, "default": 10, "constraint": {"max": 10}}
+    assert sc["page"] == {"exposed": False, "default": 0, "constraint": {"max": 5}}
+    assert sc["attributesToRetrieve"] == {"exposed": False, "default": ["title", "price"]}
+    assert sc["facets"] == {"exposed": False, "default": ["brand", "category"]}
+    assert sc["responseFields"] == {"exposed": False, "default": ["hits", "nbHits"]}
+
+
+def test_init_skip_search_controls(tmp_path, monkeypatch):
+    """When the user declines searchControls, no searchControls key is written."""
+    from algolia_agent.cli import cmd_init
+
+    providers = [{"id": "uuid", "name": "hackathon-gemini", "defaultModel": "gemini-2.5-flash"}]
+    inputs = iter(["gemini-2.5-flash", "My Agent", "PROMPT.md", "Product catalog.", "N"])
+    monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
+    with _mock_init_client(providers):
+        with _mock_select(["hackathon-gemini", "products", "<done — no more replicas>"]):
+            with patch("builtins.input", lambda _: next(inputs)):
+                cmd_init(build_parser().parse_args(["init", "--output-dir", str(tmp_path)]))
+
+    config = json.loads((tmp_path / "agent-config.json").read_text())
+    assert "searchControls" not in config
 
 
 # ── cmd_update ────────────────────────────────────────────────────────────────
@@ -821,7 +867,7 @@ def test_diff_detects_search_controls_change():
     changes = _diff(current, new_payload)
     assert len(changes) == 1
     assert "searchControls" in changes[0]
-    assert "null" in changes[0]  # current had no searchControls
+    assert "{}" in changes[0]  # current had no matching searchControls keys
 
 
 def test_diff_no_change_when_search_controls_equal():
@@ -853,6 +899,66 @@ def test_diff_detects_search_controls_change_on_replica():
     new_payload = {
         "name": "My Agent", "model": "gemini-2.5-flash", "instructions": "Hello.",
         "tools": [{"type": "algolia_search_index", "indices": indices_with_sc}],
+    }
+    changes = _diff(current, new_payload)
+    assert len(changes) == 1
+    assert "searchControls" in changes[0]
+
+
+def test_diff_no_false_positive_when_api_expands_search_controls():
+    """API-added fields (query, page, responseFields, etc.) do not cause a spurious diff."""
+    sc_config = {"hitsPerPage": {"exposed": False, "default": 10, "constraint": {"max": 10}}}
+    # The API returns this config plus extra default fields we never sent
+    sc_api = {
+        "hitsPerPage": {"exposed": False, "default": 10, "constraint": {"max": 10}},
+        "query": {"exposed": True, "default": None},
+        "page": {"exposed": True, "default": 0},
+        "responseFields": {"exposed": False, "default": None},
+        "facets": {"exposed": False, "default": None},
+        "custom": None,
+    }
+    current = {
+        "name": "My Agent", "model": "gemini-2.5-flash", "instructions": "Hello.",
+        "tools": [{"type": "algolia_search_index", "indices": [{"index": "products", "searchControls": sc_api}]}],
+    }
+    new_payload = {
+        "name": "My Agent", "model": "gemini-2.5-flash", "instructions": "Hello.",
+        "tools": [{"type": "algolia_search_index", "indices": [{"index": "products", "searchControls": sc_config}]}],
+    }
+    assert not _diff(current, new_payload)
+
+
+def test_diff_detects_change_despite_api_expansion():
+    """A real change to a config-specified field is still reported even when the API expanded the object."""
+    sc_api = {
+        "hitsPerPage": {"exposed": False, "default": 10, "constraint": {"max": 10}},
+        "query": {"exposed": True, "default": None},
+        "page": {"exposed": True, "default": 0},
+    }
+    sc_new = {"hitsPerPage": {"exposed": False, "default": 5, "constraint": {"max": 5}}}
+    current = {
+        "name": "My Agent", "model": "gemini-2.5-flash", "instructions": "Hello.",
+        "tools": [{"type": "algolia_search_index", "indices": [{"index": "products", "searchControls": sc_api}]}],
+    }
+    new_payload = {
+        "name": "My Agent", "model": "gemini-2.5-flash", "instructions": "Hello.",
+        "tools": [{"type": "algolia_search_index", "indices": [{"index": "products", "searchControls": sc_new}]}],
+    }
+    changes = _diff(current, new_payload)
+    assert len(changes) == 1
+    assert "searchControls" in changes[0]
+
+
+def test_diff_detects_clearing_search_controls():
+    """Sending searchControls: {} when current has non-empty controls is reported as a change."""
+    sc_existing = {"hitsPerPage": {"exposed": False, "default": 10, "constraint": {"max": 10}}}
+    current = {
+        "name": "My Agent", "model": "gemini-2.5-flash", "instructions": "Hello.",
+        "tools": [{"type": "algolia_search_index", "indices": [{"index": "products", "searchControls": sc_existing}]}],
+    }
+    new_payload = {
+        "name": "My Agent", "model": "gemini-2.5-flash", "instructions": "Hello.",
+        "tools": [{"type": "algolia_search_index", "indices": [{"index": "products", "searchControls": {}}]}],
     }
     changes = _diff(current, new_payload)
     assert len(changes) == 1

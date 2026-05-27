@@ -75,6 +75,13 @@ Primary index description [Search index for products_{{event_id}}.]: Product cat
 
 ? Add a replica index: <done — no more replicas>
 
+Set up searchControls to limit hits or restrict attributes? [N]: y
+  Cap hitsPerPage? Enter max (or leave blank to skip): 10
+  Cap page? Enter max (or leave blank to skip):
+  Restrict attributesToRetrieve? Enter comma-separated list (or leave blank to skip): objectID, name, price
+  Enable facets? Enter comma-separated list (or leave blank to skip):
+  Restrict responseFields? Enter comma-separated list (or leave blank to skip):
+
 ✓ agent-config.json
 ✓ PROMPT.md
 
@@ -126,12 +133,15 @@ and the instructions file in a single pass — missing vars are reported togethe
 }
 ```
 
-`searchControls` constrains what the LLM can do at query time. It is applied to every index (primary + replicas). Common fields:
+`searchControls` constrains what the LLM can do at query time. It is applied to every index (primary + replicas). Supported fields:
 
 | Field | What it does |
 |---|---|
-| `hitsPerPage` | Limit result count. Set `constraint.max` to cap it regardless of what the LLM requests. |
-| `attributesToRetrieve` | Restrict which attributes are returned in each hit. Useful for limiting the payload to only the fields the LLM actually needs. |
+| `hitsPerPage` | Limit result count. Set `constraint.max` to cap it. |
+| `page` | Limit pagination depth. Set `constraint.max` to cap it. |
+| `attributesToRetrieve` | Restrict which attributes are returned in each hit. Useful for limiting the LLM payload to only the fields it needs. |
+| `facets` | Control which facet attributes are returned in the response. |
+| `responseFields` | Restrict which top-level response fields are returned. |
 
 Set `exposed: true` to let the LLM vary the value within the constraint; `exposed: false` to fix it.
 
