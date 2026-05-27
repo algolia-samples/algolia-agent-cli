@@ -131,7 +131,7 @@ and the instructions file in a single pass — missing vars are reported togethe
 | Field | What it does |
 |---|---|
 | `hitsPerPage` | Limit result count. Set `constraint.max` to cap it regardless of what the LLM requests. |
-| `attributesToRetrieve` | Restrict which fields come back. Drops `_highlightResult`/`_snippetResult` noise and any fields the LLM doesn't need. |
+| `attributesToRetrieve` | Restrict which attributes are returned in each hit. Useful for limiting the payload to only the fields the LLM actually needs. |
 
 Set `exposed: true` to let the LLM vary the value within the constraint; `exposed: false` to fix it.
 
