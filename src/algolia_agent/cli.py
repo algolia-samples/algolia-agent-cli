@@ -363,6 +363,40 @@ def _diff(current: dict, new_payload: dict) -> list[str]:
                 lines.append(f"        was: {curr_idx[idx]!r}")
                 lines.append(f"        now: {new_idx[idx]!r}")
 
+    # Tools: report added/removed tools (by type) and scalar-field changes on matched
+    # tools (e.g. isTerminal, minResultsPerGroup). Without this, adding or removing a tool
+    # shows as "no changes" — and sending a one-tool payload that silently drops an
+    # existing tool is invisible. Only scalar fields present in the new payload are
+    # compared (same noise-avoidance as searchControls); nested index data and
+    # descriptions are diffed above, so they're excluded here.
+    def _tool_key(t):
+        return t.get("type") or t.get("name") or ""
+
+    _tool_identity = {"name", "type", "indices", "description"}
+    curr_tools = {_tool_key(t): t for t in current.get("tools", [])}
+    new_tools = {_tool_key(t): t for t in new_payload.get("tools", [])}
+
+    tool_lines = []
+    for key in sorted(set(curr_tools) | set(new_tools)):
+        if key not in curr_tools:
+            tool_lines.append(f"    + {key}")
+        elif key not in new_tools:
+            tool_lines.append(f"    - {key}")
+        else:
+            new_scalars = {
+                k: v
+                for k, v in new_tools[key].items()
+                if k not in _tool_identity and not isinstance(v, (dict, list))
+            }
+            for k in sorted(new_scalars):
+                if curr_tools[key].get(k) != new_scalars[k]:
+                    tool_lines.append(
+                        f"    ~ {key}.{k}: {curr_tools[key].get(k)!r} → {new_scalars[k]!r}"
+                    )
+    if tool_lines:
+        lines.append("  tools:")
+        lines.extend(tool_lines)
+
     return lines
 
 

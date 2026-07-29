@@ -963,3 +963,64 @@ def test_diff_detects_clearing_search_controls():
     changes = _diff(current, new_payload)
     assert len(changes) == 1
     assert "searchControls" in changes[0]
+
+
+def _agent_with_tools(tools):
+    return {"name": "My Agent", "model": "gemini-2.5-flash", "instructions": "Hello.", "tools": tools}
+
+
+def test_diff_detects_added_tool():
+    current = _agent_with_tools([{"type": "algolia_search_index", "indices": [{"index": "products"}]}])
+    new_payload = _agent_with_tools([
+        {"type": "algolia_search_index", "indices": [{"index": "products"}]},
+        {"type": "algolia_display_results", "isTerminal": True, "minResultsPerGroup": 1},
+    ])
+    changes = _diff(current, new_payload)
+    assert "  tools:" in changes
+    assert any(line.strip() == "+ algolia_display_results" for line in changes)
+
+
+def test_diff_detects_removed_tool():
+    """A payload that drops an existing tool (the silent-clobber case) is now visible."""
+    current = _agent_with_tools([
+        {"type": "algolia_search_index", "indices": [{"index": "products"}]},
+        {"type": "algolia_display_results", "isTerminal": True, "minResultsPerGroup": 1},
+    ])
+    new_payload = _agent_with_tools([{"type": "algolia_search_index", "indices": [{"index": "products"}]}])
+    changes = _diff(current, new_payload)
+    assert "  tools:" in changes
+    assert any(line.strip() == "- algolia_display_results" for line in changes)
+
+
+def test_diff_detects_tool_scalar_field_change():
+    current = _agent_with_tools([{"type": "algolia_display_results", "isTerminal": False, "minResultsPerGroup": 3}])
+    new_payload = _agent_with_tools([{"type": "algolia_display_results", "isTerminal": True, "minResultsPerGroup": 1}])
+    changes = _diff(current, new_payload)
+    assert any("algolia_display_results.isTerminal" in line and "False" in line and "True" in line for line in changes)
+    assert any("algolia_display_results.minResultsPerGroup" in line and "3" in line and "1" in line for line in changes)
+
+
+def test_diff_no_tool_change_when_identical():
+    agent = _agent_with_tools([
+        {"type": "algolia_search_index", "indices": [{"index": "products"}]},
+        {"type": "algolia_display_results", "isTerminal": True, "minResultsPerGroup": 1},
+    ])
+    assert not _diff(agent, dict(agent))
+
+
+def test_diff_no_tool_false_positive_from_api_expanded_fields():
+    """Tool-level fields the API adds but we never send (mode, description) must not diff."""
+    current = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "name": "algolia_search_index",
+        "mode": "static",
+        "allowUnlistedIndices": False,
+        "description": "API-added blurb.",
+        "indices": [{"index": "products"}],
+    }])
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "name": "algolia_search_index",
+        "indices": [{"index": "products"}],
+    }])
+    assert not _diff(current, new_payload)
