@@ -288,16 +288,24 @@ def _fmt(value) -> str:
     return json.dumps(value) if isinstance(value, (dict, list)) else repr(value)
 
 
-def _field_changed(curr_val, new_val) -> tuple[bool, object]:
-    """Compare one payload field, returning (changed, current-value-as-shown).
+def _prune_to(curr_val, new_val):
+    """Reduce a current (API) value to the shape the new payload actually sends.
 
-    For objects, only the keys the new payload actually sends are compared — the API
-    expands objects with defaults we never sent, which would otherwise diff on every
-    dry-run. An empty new object is compared unfiltered so clearing is still detected
-    (same rule as searchControls above).
+    The API expands objects with defaults and nulls we never sent — not only at the
+    top level but nested inside the values of keys we did send (e.g. a
+    ``constraint: {"min": null}`` under a searchControls entry). Recursing means only
+    what we send is ever compared, so those expansions never show up as a change.
+
+    An empty new object is left unpruned, so clearing a value is still detected.
     """
     if isinstance(new_val, dict) and isinstance(curr_val, dict) and new_val:
-        curr_val = {k: v for k, v in curr_val.items() if k in new_val}
+        return {k: _prune_to(v, new_val[k]) for k, v in curr_val.items() if k in new_val}
+    return curr_val
+
+
+def _field_changed(curr_val, new_val) -> tuple[bool, object]:
+    """Compare one payload field, returning (changed, current-value-as-shown)."""
+    curr_val = _prune_to(curr_val, new_val)
     return curr_val != new_val, curr_val
 
 
@@ -311,17 +319,16 @@ def _diff(current: dict, new_payload: dict) -> list[str]:
         if curr != new:
             lines.append(f"  {field}: {curr!r} → {new!r}")
 
-    curr_instr = current.get("instructions", "")
-    new_instr = new_payload.get("instructions", "")
+    # Compare stripped: the API's stored copy and the file read from disk routinely
+    # differ only by a trailing newline, which is not a change worth reporting.
+    curr_instr = (current.get("instructions") or "").strip()
+    new_instr = (new_payload.get("instructions") or "").strip()
     if curr_instr != new_instr:
         lines.append(
             f"  instructions: changed "
             f"({len(curr_instr.splitlines())} lines → {len(new_instr.splitlines())} lines)"
         )
 
-    # Only compare keys present in the new payload — the API expands searchControls
-    # with default fields (query, page, responseFields, etc.) that we never sent,
-    # which would otherwise cause a spurious diff on every dry-run.
     # Skip comparison entirely when no index in the new payload carries a searchControls key.
     new_has_sc = any(
         "searchControls" in i
@@ -329,29 +336,18 @@ def _diff(current: dict, new_payload: dict) -> list[str]:
         for i in t.get("indices", [])
     )
     if new_has_sc:
-        new_sc_keys = {
-            k
-            for t in new_payload.get("tools", [])
-            for i in t.get("indices", [])
-            for k in (i.get("searchControls") or {})
-        }
-        if new_sc_keys:
-            # Filter current to only the keys we're sending, ignoring API-expanded defaults.
-            curr_sc_map = {
-                i["index"]: {k: v for k, v in (i.get("searchControls") or {}).items() if k in new_sc_keys}
-                for t in current.get("tools", [])
-                for i in t.get("indices", [])
-            }
-        else:
-            # New payload sends searchControls: {} — compare unfiltered so clearing is detected.
-            curr_sc_map = {
-                i["index"]: (i.get("searchControls") or {})
-                for t in current.get("tools", [])
-                for i in t.get("indices", [])
-            }
         new_sc_map = {
             i["index"]: (i.get("searchControls") or {})
             for t in new_payload.get("tools", [])
+            for i in t.get("indices", [])
+        }
+        # Prune each index's current controls to what we actually send for that index,
+        # so API-expanded defaults at any depth never register as a change.
+        curr_sc_map = {
+            i["index"]: _prune_to(
+                i.get("searchControls") or {}, new_sc_map.get(i["index"], {})
+            )
+            for t in current.get("tools", [])
             for i in t.get("indices", [])
         }
         if curr_sc_map != new_sc_map:

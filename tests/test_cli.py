@@ -1105,3 +1105,63 @@ def test_diff_no_config_change_when_identical():
     agent = _agent_with_tools([{"type": "algolia_search_index", "indices": [{"index": "products"}]}])
     agent["config"] = {"temperature": 0.2}
     assert not _diff(agent, dict(agent))
+
+
+# ── issue #12: remaining false positives ──────────────────────────────────────
+
+def _agent_with_controls(controls):
+    return _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products", "description": "Products", "searchControls": controls}],
+    }])
+
+
+def test_diff_ignores_api_expanded_nulls_nested_in_search_controls():
+    """issue #12 case 1: the API adds null sub-fields inside values of keys we did send."""
+    current = _agent_with_controls({
+        "hitsPerPage": {"exposed": True, "default": 5, "constraint": {"min": None, "max": 5}},
+        "attributesToRetrieve": {"exposed": False, "constraint": None, "merge": None},
+    })
+    new_payload = _agent_with_controls({
+        "hitsPerPage": {"exposed": True, "default": 5, "constraint": {"max": 5}},
+        "attributesToRetrieve": {"exposed": False},
+    })
+    assert not _diff(current, new_payload)
+
+
+def test_diff_ignores_api_expanded_nulls_nested_in_predefined_params():
+    """Same nesting problem on the tool-level object path."""
+    current = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+        "predefinedSearchParameters": {"facetFilters": {"value": "a", "extra": None}},
+    }])
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+        "predefinedSearchParameters": {"facetFilters": {"value": "a"}},
+    }])
+    assert not _diff(current, new_payload)
+
+
+def test_diff_still_detects_real_nested_search_controls_change():
+    """Pruning must not mask a genuine change to a nested value we do send."""
+    current = _agent_with_controls({"hitsPerPage": {"exposed": True, "default": 5}})
+    new_payload = _agent_with_controls({"hitsPerPage": {"exposed": True, "default": 20}})
+    changes = _diff(current, new_payload)
+    assert any("searchControls" in line and "20" in line for line in changes)
+
+
+def test_diff_ignores_instructions_trailing_whitespace():
+    """issue #12 case 2: API-stored copy vs file on disk differing only by a newline."""
+    base = {"name": "My Agent", "model": "gemini-2.5-flash", "tools": []}
+    current = dict(base, instructions="line one\nline two\n")
+    new_payload = dict(base, instructions="line one\nline two")
+    assert not _diff(current, new_payload)
+
+
+def test_diff_still_detects_real_instructions_change():
+    base = {"name": "My Agent", "model": "gemini-2.5-flash", "tools": []}
+    current = dict(base, instructions="line one\n")
+    new_payload = dict(base, instructions="something else\n")
+    assert any("instructions" in line for line in _diff(current, new_payload))
