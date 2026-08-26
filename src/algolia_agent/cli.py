@@ -319,10 +319,12 @@ def _diff(current: dict, new_payload: dict) -> list[str]:
         if curr != new:
             lines.append(f"  {field}: {curr!r} → {new!r}")
 
-    # Compare stripped: the API's stored copy and the file read from disk routinely
-    # differ only by a trailing newline, which is not a change worth reporting.
-    curr_instr = (current.get("instructions") or "").strip()
-    new_instr = (new_payload.get("instructions") or "").strip()
+    # Compare right-stripped: the API's stored copy and the file read from disk
+    # routinely differ only by a trailing newline, which is not a change worth
+    # reporting. Leading whitespace is kept significant — indentation at the start of
+    # the instructions is content, not noise.
+    curr_instr = (current.get("instructions") or "").rstrip()
+    new_instr = (new_payload.get("instructions") or "").rstrip()
     if curr_instr != new_instr:
         lines.append(
             f"  instructions: changed "
@@ -351,9 +353,16 @@ def _diff(current: dict, new_payload: dict) -> list[str]:
             for i in t.get("indices", [])
         }
         if curr_sc_map != new_sc_map:
-            curr_repr = json.dumps(next(iter(curr_sc_map.values()), None))
-            new_repr = json.dumps(next(iter(new_sc_map.values()), None))
-            lines.append(f"  searchControls: {curr_repr} → {new_repr}")
+            # Per index: sampling one value could print two identical-looking sides
+            # while a different index was the one that actually changed.
+            lines.append("  searchControls:")
+            for idx in sorted(set(curr_sc_map) | set(new_sc_map)):
+                curr_val = curr_sc_map.get(idx)
+                new_val = new_sc_map.get(idx)
+                if curr_val != new_val:
+                    lines.append(
+                        f"    {idx}: {json.dumps(curr_val)} → {json.dumps(new_val)}"
+                    )
 
     curr_idx = {
         i["index"]: i.get("description", "")

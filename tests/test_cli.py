@@ -865,9 +865,10 @@ def test_diff_detects_search_controls_change():
         "tools": [{"type": "algolia_search_index", "indices": [{"index": "products", "description": "Catalog.", "searchControls": sc}]}],
     }
     changes = _diff(current, new_payload)
-    assert len(changes) == 1
-    assert "searchControls" in changes[0]
-    assert "{}" in changes[0]  # current had no matching searchControls keys
+    assert changes[0] == "  searchControls:"
+    assert len(changes) == 2
+    # current had no matching searchControls keys
+    assert changes[1].strip().startswith("products: {} →")
 
 
 def test_diff_no_change_when_search_controls_equal():
@@ -901,8 +902,10 @@ def test_diff_detects_search_controls_change_on_replica():
         "tools": [{"type": "algolia_search_index", "indices": indices_with_sc}],
     }
     changes = _diff(current, new_payload)
-    assert len(changes) == 1
-    assert "searchControls" in changes[0]
+    assert changes[0] == "  searchControls:"
+    # both indices changed, so both are named
+    assert any(line.strip().startswith("products:") for line in changes[1:])
+    assert any(line.strip().startswith("products_price_asc:") for line in changes[1:])
 
 
 def test_diff_no_false_positive_when_api_expands_search_controls():
@@ -945,8 +948,8 @@ def test_diff_detects_change_despite_api_expansion():
         "tools": [{"type": "algolia_search_index", "indices": [{"index": "products", "searchControls": sc_new}]}],
     }
     changes = _diff(current, new_payload)
-    assert len(changes) == 1
-    assert "searchControls" in changes[0]
+    assert changes[0] == "  searchControls:"
+    assert any("products" in line and "5" in line for line in changes[1:])
 
 
 def test_diff_detects_clearing_search_controls():
@@ -961,8 +964,8 @@ def test_diff_detects_clearing_search_controls():
         "tools": [{"type": "algolia_search_index", "indices": [{"index": "products", "searchControls": {}}]}],
     }
     changes = _diff(current, new_payload)
-    assert len(changes) == 1
-    assert "searchControls" in changes[0]
+    assert changes[0] == "  searchControls:"
+    assert any(line.strip().endswith("→ {}") for line in changes[1:])
 
 
 def _agent_with_tools(tools):
@@ -1149,7 +1152,8 @@ def test_diff_still_detects_real_nested_search_controls_change():
     current = _agent_with_controls({"hitsPerPage": {"exposed": True, "default": 5}})
     new_payload = _agent_with_controls({"hitsPerPage": {"exposed": True, "default": 20}})
     changes = _diff(current, new_payload)
-    assert any("searchControls" in line and "20" in line for line in changes)
+    assert changes[0] == "  searchControls:"
+    assert any("products" in line and "20" in line for line in changes[1:])
 
 
 def test_diff_ignores_instructions_trailing_whitespace():
@@ -1164,4 +1168,42 @@ def test_diff_still_detects_real_instructions_change():
     base = {"name": "My Agent", "model": "gemini-2.5-flash", "tools": []}
     current = dict(base, instructions="line one\n")
     new_payload = dict(base, instructions="something else\n")
+    assert any("instructions" in line for line in _diff(current, new_payload))
+
+
+# ── PR #13 review findings ────────────────────────────────────────────────────
+
+def test_diff_names_the_index_whose_search_controls_changed():
+    """A change on one index must not print another index's (unchanged) values.
+
+    Sampling the first index produced output with identical-looking sides, announcing
+    a change the reader could not see.
+    """
+    def agent(sc_products, sc_replica):
+        return _agent_with_tools([{
+            "type": "algolia_search_index",
+            "indices": [
+                {"index": "products", "description": "d", "searchControls": sc_products},
+                {"index": "products_price_asc", "description": "d", "searchControls": sc_replica},
+            ],
+        }])
+
+    same = {"hitsPerPage": {"default": 5}}
+    changes = _diff(agent(same, same), agent(same, {"hitsPerPage": {"default": 99}}))
+    assert changes[0] == "  searchControls:"
+    changed = [line for line in changes[1:]]
+    assert len(changed) == 1, changed
+    assert changed[0].strip().startswith("products_price_asc:")
+    assert "99" in changed[0]
+    # No line may show identical values on both sides.
+    for line in changed:
+        before, _, after = line.partition(" → ")
+        assert before.split(": ", 1)[1] != after
+
+
+def test_diff_detects_leading_whitespace_change_in_instructions():
+    """Only trailing whitespace is noise; leading indentation is content."""
+    base = {"name": "My Agent", "model": "gemini-2.5-flash", "tools": []}
+    current = dict(base, instructions="line one\nline two")
+    new_payload = dict(base, instructions="\n\nline one\nline two")
     assert any("instructions" in line for line in _diff(current, new_payload))
