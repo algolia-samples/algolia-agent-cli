@@ -283,6 +283,14 @@ def cmd_create(client: AlgoliaAgentClient, args: argparse.Namespace):
     print(f"\nTo publish: algolia-agent publish {agent['id']}")
 
 
+_MISSING = object()
+
+# Tool-field defaults the API applies when a field is omitted, established by probing a
+# throwaway agent. A field already at its default loses nothing by being left out, so
+# only deviations are reported. Fields absent from this map are reported conservatively.
+_TOOL_FIELD_DEFAULTS = {"mode": "static", "allowUnlistedIndices": False}
+
+
 def _fmt(value) -> str:
     """Render a diff value: JSON for objects/arrays, repr for scalars."""
     return json.dumps(value) if isinstance(value, (dict, list)) else repr(value)
@@ -331,38 +339,35 @@ def _diff(current: dict, new_payload: dict) -> list[str]:
             f"({len(curr_instr.splitlines())} lines → {len(new_instr.splitlines())} lines)"
         )
 
-    # Skip comparison entirely when no index in the new payload carries a searchControls key.
-    new_has_sc = any(
-        "searchControls" in i
+    # searchControls live per index. Omitting them from the payload WIPES them —
+    # verified against the live API — so an absent key is a destructive change, not
+    # silence. Present values are compared with the prune rule, since the API expands
+    # them with defaults and nulls we never sent.
+    curr_sc = {
+        i["index"]: i.get("searchControls")
+        for t in current.get("tools", [])
+        for i in t.get("indices", [])
+    }
+    new_sc = {
+        i["index"]: i.get("searchControls")
         for t in new_payload.get("tools", [])
         for i in t.get("indices", [])
-    )
-    if new_has_sc:
-        new_sc_map = {
-            i["index"]: (i.get("searchControls") or {})
-            for t in new_payload.get("tools", [])
-            for i in t.get("indices", [])
-        }
-        # Prune each index's current controls to what we actually send for that index,
-        # so API-expanded defaults at any depth never register as a change.
-        curr_sc_map = {
-            i["index"]: _prune_to(
-                i.get("searchControls") or {}, new_sc_map.get(i["index"], {})
-            )
-            for t in current.get("tools", [])
-            for i in t.get("indices", [])
-        }
-        if curr_sc_map != new_sc_map:
-            # Per index: sampling one value could print two identical-looking sides
-            # while a different index was the one that actually changed.
-            lines.append("  searchControls:")
-            for idx in sorted(set(curr_sc_map) | set(new_sc_map)):
-                curr_val = curr_sc_map.get(idx)
-                new_val = new_sc_map.get(idx)
-                if curr_val != new_val:
-                    lines.append(
-                        f"    {idx}: {json.dumps(curr_val)} → {json.dumps(new_val)}"
-                    )
+    }
+    sc_lines = []
+    for idx in sorted(set(curr_sc) | set(new_sc)):
+        if idx not in new_sc:
+            continue  # the index itself is going away; the indices: block reports that
+        curr_val, new_val = curr_sc.get(idx), new_sc[idx]
+        if new_val is None:
+            if curr_val:
+                sc_lines.append(f"    {idx}: {_fmt(curr_val)} → none (will be removed)")
+        else:
+            pruned = _prune_to(curr_val or {}, new_val)
+            if pruned != new_val:
+                sc_lines.append(f"    {idx}: {_fmt(pruned)} → {_fmt(new_val)}")
+    if sc_lines:
+        lines.append("  searchControls:")
+        lines.extend(sc_lines)
 
     curr_idx = {
         i["index"]: i.get("description", "")
@@ -413,6 +418,18 @@ def _diff(current: dict, new_payload: dict) -> list[str]:
                     tool_lines.append(
                         f"    ~ {key}.{k}: {_fmt(curr_shown)} → {_fmt(new_fields[k])}"
                     )
+            # The tool object is replaced, not merged, so a field the payload omits
+            # reverts to its API default — verified: mode "dynamic" became "static" and
+            # allowUnlistedIndices true became false. Report those, or the dry-run stays
+            # silent while the update turns settings off. "description" is excluded via
+            # _tool_identity because the API regenerates it from the index descriptions.
+            for k in sorted(set(curr_tools[key]) - set(new_fields) - _tool_identity):
+                curr_val = curr_tools[key][k]
+                if curr_val is None or curr_val == _TOOL_FIELD_DEFAULTS.get(k, _MISSING):
+                    continue  # already at its default; omitting it changes nothing
+                tool_lines.append(
+                    f"    ~ {key}.{k}: {_fmt(curr_val)} → default (not sent)"
+                )
     if tool_lines:
         lines.append("  tools:")
         lines.extend(tool_lines)

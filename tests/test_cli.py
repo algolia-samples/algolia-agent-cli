@@ -1234,3 +1234,100 @@ def test_diff_reports_config_keys_that_will_be_destroyed():
     for key in ("enableAlgoliaMcp", "feedback", "max_iterations"):
         assert any(key in line for line in removed), key
     assert all("will be removed" in line for line in removed)
+
+
+def test_diff_reports_search_controls_that_will_be_wiped():
+    """Omitting searchControls from the payload deletes them, so silence is wrong.
+
+    Verified against the live API: a PATCH whose index entries carry no
+    searchControls key left the stored value null. The old `new_has_sc` gate skipped
+    comparison in exactly this case, reporting nothing for a destructive update.
+    """
+    sc = {"hitsPerPage": {"exposed": True, "default": 7, "constraint": {"min": 2, "max": 42}}}
+    current = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products", "description": "d", "searchControls": sc}],
+    }])
+    # What build_tool() emits when the config file has no searchControls key.
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products", "description": "d"}],
+    }])
+    changes = _diff(current, new_payload)
+    assert "  searchControls:" in changes
+    assert any("products" in line and "will be removed" in line for line in changes[1:])
+
+
+def test_diff_quiet_when_neither_side_has_search_controls():
+    """Removing the gate must not make no-searchControls agents noisy."""
+    agent = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products", "description": "d"}],
+    }])
+    assert not _diff(agent, dict(agent))
+
+
+def test_diff_reports_wipe_per_index_only_where_present():
+    """Only indices that actually lose controls are named."""
+    sc = {"hitsPerPage": {"exposed": True, "default": 7}}
+    current = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [
+            {"index": "products", "description": "d", "searchControls": sc},
+            {"index": "products_asc", "description": "d"},
+        ],
+    }])
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [
+            {"index": "products", "description": "d"},
+            {"index": "products_asc", "description": "d"},
+        ],
+    }])
+    changes = _diff(current, new_payload)
+    named = [line for line in changes if line.startswith("    ")]
+    assert len(named) == 1, named
+    assert "products:" in named[0] and "products_asc" not in named[0]
+
+
+def test_diff_reports_tool_fields_that_revert_to_default():
+    """Fields the payload omits revert, because the tool object is replaced not merged.
+
+    Verified against the live API: a PATCH omitting them turned mode "dynamic" into
+    "static" and allowUnlistedIndices true into false.
+    """
+    current = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "name": "algolia_search_index",
+        "mode": "dynamic",
+        "allowUnlistedIndices": True,
+        "description": "API-regenerated blurb.",
+        "indices": [{"index": "products", "description": "d"}],
+    }])
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "name": "algolia_search_index",
+        "indices": [{"index": "products", "description": "d"}],
+    }])
+    changes = _diff(current, new_payload)
+    assert "  tools:" in changes
+    reverts = [line for line in changes if "default (not sent)" in line]
+    assert len(reverts) == 2, reverts
+    assert any("mode" in line and "dynamic" in line for line in reverts)
+    assert any("allowUnlistedIndices" in line for line in reverts)
+    # The API regenerates tool description, so it must not be reported.
+    assert not any("description" in line for line in reverts)
+
+
+def test_diff_ignores_null_tool_fields_not_sent():
+    """A field already null loses nothing by being omitted."""
+    current = _agent_with_tools([{
+        "type": "algolia_search_index", "name": "algolia_search_index",
+        "mode": None, "allowUnlistedIndices": None,
+        "indices": [{"index": "products", "description": "d"}],
+    }])
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index", "name": "algolia_search_index",
+        "indices": [{"index": "products", "description": "d"}],
+    }])
+    assert not _diff(current, new_payload)
