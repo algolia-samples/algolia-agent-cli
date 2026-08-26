@@ -1024,3 +1024,84 @@ def test_diff_no_tool_false_positive_from_api_expanded_fields():
         "indices": [{"index": "products"}],
     }])
     assert not _diff(current, new_payload)
+
+
+def test_diff_detects_predefined_search_parameters_change():
+    """predefinedSearchParameters lives at tool level; a change must not report as no-op."""
+    current = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+        "predefinedSearchParameters": {"hitsPerPage": 10},
+    }])
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+        "predefinedSearchParameters": {"hitsPerPage": 25},
+    }])
+    changes = _diff(current, new_payload)
+    assert any("algolia_search_index.predefinedSearchParameters" in line for line in changes)
+    assert any("25" in line for line in changes)
+
+
+def test_diff_detects_added_predefined_search_parameters():
+    current = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+    }])
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+        "predefinedSearchParameters": {"filters": "in_stock:true"},
+    }])
+    changes = _diff(current, new_payload)
+    assert any("algolia_search_index.predefinedSearchParameters" in line for line in changes)
+
+
+def test_diff_no_false_positive_when_predefined_params_unchanged():
+    """Only keys we send are compared — API-expanded defaults must not diff."""
+    current = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+        "predefinedSearchParameters": {
+            "hitsPerPage": 10,
+            "page": 0,
+            "responseFields": ["*"],
+        },
+    }])
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+        "predefinedSearchParameters": {"hitsPerPage": 10},
+    }])
+    assert not _diff(current, new_payload)
+
+
+def test_diff_detects_clearing_predefined_search_parameters():
+    """An empty object is compared unfiltered, so clearing is still visible."""
+    current = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+        "predefinedSearchParameters": {"hitsPerPage": 10},
+    }])
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+        "predefinedSearchParameters": {},
+    }])
+    changes = _diff(current, new_payload)
+    assert any("algolia_search_index.predefinedSearchParameters" in line for line in changes)
+
+
+def test_diff_detects_config_block_change():
+    current = _agent_with_tools([{"type": "algolia_search_index", "indices": [{"index": "products"}]}])
+    current["config"] = {"temperature": 0.2}
+    new_payload = _agent_with_tools([{"type": "algolia_search_index", "indices": [{"index": "products"}]}])
+    new_payload["config"] = {"temperature": 0.9}
+    changes = _diff(current, new_payload)
+    assert any("config:" in line and "0.9" in line for line in changes)
+
+
+def test_diff_no_config_change_when_identical():
+    agent = _agent_with_tools([{"type": "algolia_search_index", "indices": [{"index": "products"}]}])
+    agent["config"] = {"temperature": 0.2}
+    assert not _diff(agent, dict(agent))

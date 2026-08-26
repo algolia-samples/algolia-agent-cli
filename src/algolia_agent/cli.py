@@ -283,6 +283,24 @@ def cmd_create(client: AlgoliaAgentClient, args: argparse.Namespace):
     print(f"\nTo publish: algolia-agent publish {agent['id']}")
 
 
+def _fmt(value) -> str:
+    """Render a diff value: JSON for objects/arrays, repr for scalars."""
+    return json.dumps(value) if isinstance(value, (dict, list)) else repr(value)
+
+
+def _field_changed(curr_val, new_val) -> tuple[bool, object]:
+    """Compare one payload field, returning (changed, current-value-as-shown).
+
+    For objects, only the keys the new payload actually sends are compared — the API
+    expands objects with defaults we never sent, which would otherwise diff on every
+    dry-run. An empty new object is compared unfiltered so clearing is still detected
+    (same rule as searchControls above).
+    """
+    if isinstance(new_val, dict) and isinstance(curr_val, dict) and new_val:
+        curr_val = {k: v for k, v in curr_val.items() if k in new_val}
+    return curr_val != new_val, curr_val
+
+
 def _diff(current: dict, new_payload: dict) -> list[str]:
     """Return human-readable lines describing what would change."""
     lines = []
@@ -363,12 +381,12 @@ def _diff(current: dict, new_payload: dict) -> list[str]:
                 lines.append(f"        was: {curr_idx[idx]!r}")
                 lines.append(f"        now: {new_idx[idx]!r}")
 
-    # Tools: report added/removed tools (by type) and scalar-field changes on matched
-    # tools (e.g. isTerminal, minResultsPerGroup). Without this, adding or removing a tool
-    # shows as "no changes" — and sending a one-tool payload that silently drops an
-    # existing tool is invisible. Only scalar fields present in the new payload are
-    # compared (same noise-avoidance as searchControls); nested index data and
-    # descriptions are diffed above, so they're excluded here.
+    # Tools: report added/removed tools (by type) and per-field changes on matched tools
+    # (e.g. isTerminal, minResultsPerGroup, predefinedSearchParameters). Without this,
+    # adding or removing a tool shows as "no changes" — and sending a one-tool payload
+    # that silently drops an existing tool is invisible. Only fields present in the new
+    # payload are compared (same noise-avoidance as searchControls); nested index data
+    # and descriptions are diffed above, so they're excluded here.
     def _tool_key(t):
         return t.get("type") or t.get("name") or ""
 
@@ -383,19 +401,24 @@ def _diff(current: dict, new_payload: dict) -> list[str]:
         elif key not in new_tools:
             tool_lines.append(f"    - {key}")
         else:
-            new_scalars = {
-                k: v
-                for k, v in new_tools[key].items()
-                if k not in _tool_identity and not isinstance(v, (dict, list))
-            }
-            for k in sorted(new_scalars):
-                if curr_tools[key].get(k) != new_scalars[k]:
+            new_fields = {k: v for k, v in new_tools[key].items() if k not in _tool_identity}
+            for k in sorted(new_fields):
+                changed, curr_shown = _field_changed(curr_tools[key].get(k), new_fields[k])
+                if changed:
                     tool_lines.append(
-                        f"    ~ {key}.{k}: {curr_tools[key].get(k)!r} → {new_scalars[k]!r}"
+                        f"    ~ {key}.{k}: {_fmt(curr_shown)} → {_fmt(new_fields[k])}"
                     )
     if tool_lines:
         lines.append("  tools:")
         lines.extend(tool_lines)
+
+    # config block: same present-keys-only rule, since the API may expand it with
+    # defaults we never sent.
+    new_cfg = new_payload.get("config")
+    if new_cfg is not None:
+        changed, curr_shown = _field_changed(current.get("config"), new_cfg)
+        if changed:
+            lines.append(f"  config: {_fmt(curr_shown)} → {_fmt(new_cfg)}")
 
     return lines
 
