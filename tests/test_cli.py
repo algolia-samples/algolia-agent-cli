@@ -1101,7 +1101,8 @@ def test_diff_detects_config_block_change():
     new_payload = _agent_with_tools([{"type": "algolia_search_index", "indices": [{"index": "products"}]}])
     new_payload["config"] = {"temperature": 0.9}
     changes = _diff(current, new_payload)
-    assert any("config:" in line and "0.9" in line for line in changes)
+    assert "  config:" in changes
+    assert any(line.strip().startswith("~ temperature:") and "0.9" in line for line in changes)
 
 
 def test_diff_no_config_change_when_identical():
@@ -1207,3 +1208,29 @@ def test_diff_detects_leading_whitespace_change_in_instructions():
     current = dict(base, instructions="line one\nline two")
     new_payload = dict(base, instructions="\n\nline one\nline two")
     assert any("instructions" in line for line in _diff(current, new_payload))
+
+
+def test_diff_reports_config_keys_that_will_be_destroyed():
+    """PATCH replaces the config object, so keys absent from the payload are deleted.
+
+    Verified against the live API: a payload carrying only "suggestions" reduced a
+    4-key config to 1. Pruning the current side to the payload's keys would report
+    "no change" for exactly that update, which is false assurance.
+    """
+    current = _agent_with_tools([{"type": "algolia_search_index", "indices": [{"index": "products"}]}])
+    current["config"] = {
+        "suggestions": {"enabled": True},
+        "enableAlgoliaMcp": True,
+        "feedback": {"enabled": True},
+        "max_iterations": 25,
+    }
+    new_payload = _agent_with_tools([{"type": "algolia_search_index", "indices": [{"index": "products"}]}])
+    new_payload["config"] = {"suggestions": {"enabled": True}}
+
+    changes = _diff(current, new_payload)
+    assert "  config:" in changes
+    removed = [line for line in changes if line.strip().startswith("-")]
+    assert len(removed) == 3, removed
+    for key in ("enableAlgoliaMcp", "feedback", "max_iterations"):
+        assert any(key in line for line in removed), key
+    assert all("will be removed" in line for line in removed)

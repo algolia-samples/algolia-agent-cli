@@ -417,13 +417,22 @@ def _diff(current: dict, new_payload: dict) -> list[str]:
         lines.append("  tools:")
         lines.extend(tool_lines)
 
-    # config block: same present-keys-only rule, since the API may expand it with
-    # defaults we never sent.
+    # config block: the API replaces this object wholesale instead of merging, so any
+    # key the payload omits is destroyed. Compare unpruned — the present-keys-only rule
+    # used elsewhere would report "no change" for an update that drops keys — and name
+    # the casualties explicitly.
     new_cfg = new_payload.get("config")
     if new_cfg is not None:
-        changed, curr_shown = _field_changed(current.get("config"), new_cfg)
-        if changed:
-            lines.append(f"  config: {_fmt(curr_shown)} → {_fmt(new_cfg)}")
+        curr_cfg = current.get("config") or {}
+        if curr_cfg != new_cfg:
+            lines.append("  config:")
+            for k in sorted(set(curr_cfg) | set(new_cfg)):
+                if k not in new_cfg:
+                    lines.append(f"    - {k}: {_fmt(curr_cfg[k])} (will be removed)")
+                elif k not in curr_cfg:
+                    lines.append(f"    + {k}: {_fmt(new_cfg[k])}")
+                elif curr_cfg[k] != new_cfg[k]:
+                    lines.append(f"    ~ {k}: {_fmt(curr_cfg[k])} → {_fmt(new_cfg[k])}")
 
     return lines
 
