@@ -101,17 +101,41 @@ class AlgoliaAgentClient:
                     continue
                 raise AgentAPIError(0, f"Request timed out after {_TIMEOUT}s") from None
 
+    def _paginated(self, path: str) -> list[dict]:
+        """Collect every page of a list endpoint.
+
+        These endpoints wrap results as {"data": [...], "pagination": {...}} and cap a
+        page at 10 items, so reading only the first response silently truncates — an
+        account with 14 agents reported 10. Responses without a "pagination" block are
+        treated as complete.
+        """
+        items: list[dict] = []
+        page = 1
+        while True:
+            sep = "&" if "?" in path else "?"
+            result = self._request(f"{path}{sep}page={page}")
+            if not isinstance(result, dict):
+                # Endpoint returns a bare list; nothing to page through.
+                return result if isinstance(result, list) else items
+            page_items = result.get("data", [])
+            items += page_items
+            total_pages = (result.get("pagination") or {}).get("totalPages") or 1
+            # `not page_items` guards against a totalPages that never resolves.
+            if page >= total_pages or not page_items:
+                return items
+            page += 1
+
     def list_agents(self) -> list[dict]:
-        result = self._request("/agents")
-        return result.get("data", [])
+        return self._paginated("/agents")
 
     def get_agent(self, agent_id: str) -> dict:
         result = self._request(f"/agents/{agent_id}")
         return result.get("data", result)
 
     def list_providers(self) -> list[dict]:
-        result = self._request("/providers")
-        return result.get("data", [])
+        # Same paginated envelope as /agents; only 3 providers today, but the cap is
+        # the same 10.
+        return self._paginated("/providers")
 
     def list_indices(self) -> list[str]:
         """Return all index names for this application via the Algolia Search API."""

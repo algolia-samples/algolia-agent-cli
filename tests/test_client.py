@@ -76,6 +76,64 @@ def test_list_agents(client):
     assert result == agents
 
 
+def test_list_agents_follows_pagination(client):
+    """The API caps a page at 10; reading only page 1 silently truncated the list."""
+    page1 = [{"id": f"a{n}"} for n in range(10)]
+    page2 = [{"id": f"b{n}"} for n in range(4)]
+    responses = [
+        _mock_response({"data": page1, "pagination": {"page": 1, "limit": 10, "totalCount": 14, "totalPages": 2}}),
+        _mock_response({"data": page2, "pagination": {"page": 2, "limit": 10, "totalCount": 14, "totalPages": 2}}),
+    ]
+    with patch("urllib.request.urlopen", side_effect=responses) as m:
+        result = client.list_agents()
+    assert result == page1 + page2
+    assert m.call_count == 2
+    assert "page=2" in m.call_args_list[1].args[0].full_url
+
+
+def test_list_agents_single_page_makes_one_request(client):
+    agents = [{"id": "abc"}]
+    envelope = {"data": agents, "pagination": {"page": 1, "limit": 10, "totalCount": 1, "totalPages": 1}}
+    with patch("urllib.request.urlopen", return_value=_mock_response(envelope)) as m:
+        result = client.list_agents()
+    assert result == agents
+    assert m.call_count == 1
+
+
+def test_list_agents_without_pagination_block(client):
+    """A response carrying no pagination block is treated as complete."""
+    agents = [{"id": "abc"}]
+    with patch("urllib.request.urlopen", return_value=_mock_response({"data": agents})) as m:
+        result = client.list_agents()
+    assert result == agents
+    assert m.call_count == 1
+
+
+def test_list_agents_stops_when_a_page_is_empty(client):
+    """A totalPages that never resolves must not loop forever."""
+    responses = [
+        _mock_response({"data": [{"id": "a"}], "pagination": {"totalPages": 99}}),
+        _mock_response({"data": [], "pagination": {"totalPages": 99}}),
+    ]
+    with patch("urllib.request.urlopen", side_effect=responses) as m:
+        result = client.list_agents()
+    assert result == [{"id": "a"}]
+    assert m.call_count == 2
+
+
+def test_list_providers_follows_pagination(client):
+    """/providers uses the same envelope and the same 10-item cap."""
+    page1 = [{"id": f"p{n}"} for n in range(10)]
+    page2 = [{"id": "p10"}]
+    responses = [
+        _mock_response({"data": page1, "pagination": {"totalPages": 2}}),
+        _mock_response({"data": page2, "pagination": {"totalPages": 2}}),
+    ]
+    with patch("urllib.request.urlopen", side_effect=responses):
+        result = client.list_providers()
+    assert result == page1 + page2
+
+
 def test_get_agent(client):
     agent = {"id": "abc", "name": "Test", "status": "draft"}
     with patch("urllib.request.urlopen", return_value=_mock_response({"data": agent})):
