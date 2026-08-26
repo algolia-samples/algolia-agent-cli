@@ -2,7 +2,7 @@
   "_note": "TCG reference config. Pass --var event_id=... --var event_name=... --var booth=...",
   "name": "TCG Agent {{event_name}}",
   "provider": "hackathon-gemini",
-  "model": "gemini-2.5-flash",
+  "model": "gemini-3.5-flash",
   "instructions": "PROMPT.md",
   "index": "tcg_cards_{{event_id}}",
   "index_description": "Pokemon cards in the {{event_name}} vending machine. Use for inventory and pricing queries.",

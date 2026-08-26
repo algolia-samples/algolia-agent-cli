@@ -283,6 +283,40 @@ def cmd_create(client: AlgoliaAgentClient, args: argparse.Namespace):
     print(f"\nTo publish: algolia-agent publish {agent['id']}")
 
 
+_MISSING = object()
+
+# Tool-field defaults the API applies when a field is omitted, established by probing a
+# throwaway agent. A field already at its default loses nothing by being left out, so
+# only deviations are reported. Fields absent from this map are reported conservatively.
+_TOOL_FIELD_DEFAULTS = {"mode": "static", "allowUnlistedIndices": False}
+
+
+def _fmt(value) -> str:
+    """Render a diff value: JSON for objects/arrays, repr for scalars."""
+    return json.dumps(value) if isinstance(value, (dict, list)) else repr(value)
+
+
+def _prune_to(curr_val, new_val):
+    """Reduce a current (API) value to the shape the new payload actually sends.
+
+    The API expands objects with defaults and nulls we never sent — not only at the
+    top level but nested inside the values of keys we did send (e.g. a
+    ``constraint: {"min": null}`` under a searchControls entry). Recursing means only
+    what we send is ever compared, so those expansions never show up as a change.
+
+    An empty new object is left unpruned, so clearing a value is still detected.
+    """
+    if isinstance(new_val, dict) and isinstance(curr_val, dict) and new_val:
+        return {k: _prune_to(v, new_val[k]) for k, v in curr_val.items() if k in new_val}
+    return curr_val
+
+
+def _field_changed(curr_val, new_val) -> tuple[bool, object]:
+    """Compare one payload field, returning (changed, current-value-as-shown)."""
+    curr_val = _prune_to(curr_val, new_val)
+    return curr_val != new_val, curr_val
+
+
 def _diff(current: dict, new_payload: dict) -> list[str]:
     """Return human-readable lines describing what would change."""
     lines = []
@@ -293,53 +327,47 @@ def _diff(current: dict, new_payload: dict) -> list[str]:
         if curr != new:
             lines.append(f"  {field}: {curr!r} → {new!r}")
 
-    curr_instr = current.get("instructions", "")
-    new_instr = new_payload.get("instructions", "")
+    # Compare right-stripped: the API's stored copy and the file read from disk
+    # routinely differ only by a trailing newline, which is not a change worth
+    # reporting. Leading whitespace is kept significant — indentation at the start of
+    # the instructions is content, not noise.
+    curr_instr = (current.get("instructions") or "").rstrip()
+    new_instr = (new_payload.get("instructions") or "").rstrip()
     if curr_instr != new_instr:
         lines.append(
             f"  instructions: changed "
             f"({len(curr_instr.splitlines())} lines → {len(new_instr.splitlines())} lines)"
         )
 
-    # Only compare keys present in the new payload — the API expands searchControls
-    # with default fields (query, page, responseFields, etc.) that we never sent,
-    # which would otherwise cause a spurious diff on every dry-run.
-    # Skip comparison entirely when no index in the new payload carries a searchControls key.
-    new_has_sc = any(
-        "searchControls" in i
+    # searchControls live per index. Omitting them from the payload WIPES them —
+    # verified against the live API — so an absent key is a destructive change, not
+    # silence. Present values are compared with the prune rule, since the API expands
+    # them with defaults and nulls we never sent.
+    curr_sc = {
+        i["index"]: i.get("searchControls")
+        for t in current.get("tools", [])
+        for i in t.get("indices", [])
+    }
+    new_sc = {
+        i["index"]: i.get("searchControls")
         for t in new_payload.get("tools", [])
         for i in t.get("indices", [])
-    )
-    if new_has_sc:
-        new_sc_keys = {
-            k
-            for t in new_payload.get("tools", [])
-            for i in t.get("indices", [])
-            for k in (i.get("searchControls") or {})
-        }
-        if new_sc_keys:
-            # Filter current to only the keys we're sending, ignoring API-expanded defaults.
-            curr_sc_map = {
-                i["index"]: {k: v for k, v in (i.get("searchControls") or {}).items() if k in new_sc_keys}
-                for t in current.get("tools", [])
-                for i in t.get("indices", [])
-            }
+    }
+    sc_lines = []
+    for idx in sorted(set(curr_sc) | set(new_sc)):
+        if idx not in new_sc:
+            continue  # the index itself is going away; the indices: block reports that
+        curr_val, new_val = curr_sc.get(idx), new_sc[idx]
+        if new_val is None:
+            if curr_val:
+                sc_lines.append(f"    {idx}: {_fmt(curr_val)} → none (will be removed)")
         else:
-            # New payload sends searchControls: {} — compare unfiltered so clearing is detected.
-            curr_sc_map = {
-                i["index"]: (i.get("searchControls") or {})
-                for t in current.get("tools", [])
-                for i in t.get("indices", [])
-            }
-        new_sc_map = {
-            i["index"]: (i.get("searchControls") or {})
-            for t in new_payload.get("tools", [])
-            for i in t.get("indices", [])
-        }
-        if curr_sc_map != new_sc_map:
-            curr_repr = json.dumps(next(iter(curr_sc_map.values()), None))
-            new_repr = json.dumps(next(iter(new_sc_map.values()), None))
-            lines.append(f"  searchControls: {curr_repr} → {new_repr}")
+            pruned = _prune_to(curr_val or {}, new_val)
+            if pruned != new_val:
+                sc_lines.append(f"    {idx}: {_fmt(pruned)} → {_fmt(new_val)}")
+    if sc_lines:
+        lines.append("  searchControls:")
+        lines.extend(sc_lines)
 
     curr_idx = {
         i["index"]: i.get("description", "")
@@ -362,6 +390,66 @@ def _diff(current: dict, new_payload: dict) -> list[str]:
                 lines.append(f"    ~ {idx!r}")
                 lines.append(f"        was: {curr_idx[idx]!r}")
                 lines.append(f"        now: {new_idx[idx]!r}")
+
+    # Tools: report added/removed tools (by type) and per-field changes on matched tools
+    # (e.g. isTerminal, minResultsPerGroup, predefinedSearchParameters). Without this,
+    # adding or removing a tool shows as "no changes" — and sending a one-tool payload
+    # that silently drops an existing tool is invisible. Only fields present in the new
+    # payload are compared (same noise-avoidance as searchControls); nested index data
+    # and descriptions are diffed above, so they're excluded here.
+    def _tool_key(t):
+        return t.get("type") or t.get("name") or ""
+
+    _tool_identity = {"name", "type", "indices", "description"}
+    curr_tools = {_tool_key(t): t for t in current.get("tools", [])}
+    new_tools = {_tool_key(t): t for t in new_payload.get("tools", [])}
+
+    tool_lines = []
+    for key in sorted(set(curr_tools) | set(new_tools)):
+        if key not in curr_tools:
+            tool_lines.append(f"    + {key}")
+        elif key not in new_tools:
+            tool_lines.append(f"    - {key}")
+        else:
+            new_fields = {k: v for k, v in new_tools[key].items() if k not in _tool_identity}
+            for k in sorted(new_fields):
+                changed, curr_shown = _field_changed(curr_tools[key].get(k), new_fields[k])
+                if changed:
+                    tool_lines.append(
+                        f"    ~ {key}.{k}: {_fmt(curr_shown)} → {_fmt(new_fields[k])}"
+                    )
+            # The tool object is replaced, not merged, so a field the payload omits
+            # reverts to its API default — verified: mode "dynamic" became "static" and
+            # allowUnlistedIndices true became false. Report those, or the dry-run stays
+            # silent while the update turns settings off. "description" is excluded via
+            # _tool_identity because the API regenerates it from the index descriptions.
+            for k in sorted(set(curr_tools[key]) - set(new_fields) - _tool_identity):
+                curr_val = curr_tools[key][k]
+                if curr_val is None or curr_val == _TOOL_FIELD_DEFAULTS.get(k, _MISSING):
+                    continue  # already at its default; omitting it changes nothing
+                tool_lines.append(
+                    f"    ~ {key}.{k}: {_fmt(curr_val)} → default (not sent)"
+                )
+    if tool_lines:
+        lines.append("  tools:")
+        lines.extend(tool_lines)
+
+    # config block: the API replaces this object wholesale instead of merging, so any
+    # key the payload omits is destroyed. Compare unpruned — the present-keys-only rule
+    # used elsewhere would report "no change" for an update that drops keys — and name
+    # the casualties explicitly.
+    new_cfg = new_payload.get("config")
+    if new_cfg is not None:
+        curr_cfg = current.get("config") or {}
+        if curr_cfg != new_cfg:
+            lines.append("  config:")
+            for k in sorted(set(curr_cfg) | set(new_cfg)):
+                if k not in new_cfg:
+                    lines.append(f"    - {k}: {_fmt(curr_cfg[k])} (will be removed)")
+                elif k not in curr_cfg:
+                    lines.append(f"    + {k}: {_fmt(new_cfg[k])}")
+                elif curr_cfg[k] != new_cfg[k]:
+                    lines.append(f"    ~ {k}: {_fmt(curr_cfg[k])} → {_fmt(new_cfg[k])}")
 
     return lines
 

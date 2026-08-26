@@ -865,9 +865,10 @@ def test_diff_detects_search_controls_change():
         "tools": [{"type": "algolia_search_index", "indices": [{"index": "products", "description": "Catalog.", "searchControls": sc}]}],
     }
     changes = _diff(current, new_payload)
-    assert len(changes) == 1
-    assert "searchControls" in changes[0]
-    assert "{}" in changes[0]  # current had no matching searchControls keys
+    assert changes[0] == "  searchControls:"
+    assert len(changes) == 2
+    # current had no matching searchControls keys
+    assert changes[1].strip().startswith("products: {} →")
 
 
 def test_diff_no_change_when_search_controls_equal():
@@ -901,8 +902,10 @@ def test_diff_detects_search_controls_change_on_replica():
         "tools": [{"type": "algolia_search_index", "indices": indices_with_sc}],
     }
     changes = _diff(current, new_payload)
-    assert len(changes) == 1
-    assert "searchControls" in changes[0]
+    assert changes[0] == "  searchControls:"
+    # both indices changed, so both are named
+    assert any(line.strip().startswith("products:") for line in changes[1:])
+    assert any(line.strip().startswith("products_price_asc:") for line in changes[1:])
 
 
 def test_diff_no_false_positive_when_api_expands_search_controls():
@@ -945,8 +948,8 @@ def test_diff_detects_change_despite_api_expansion():
         "tools": [{"type": "algolia_search_index", "indices": [{"index": "products", "searchControls": sc_new}]}],
     }
     changes = _diff(current, new_payload)
-    assert len(changes) == 1
-    assert "searchControls" in changes[0]
+    assert changes[0] == "  searchControls:"
+    assert any("products" in line and "5" in line for line in changes[1:])
 
 
 def test_diff_detects_clearing_search_controls():
@@ -961,5 +964,370 @@ def test_diff_detects_clearing_search_controls():
         "tools": [{"type": "algolia_search_index", "indices": [{"index": "products", "searchControls": {}}]}],
     }
     changes = _diff(current, new_payload)
-    assert len(changes) == 1
-    assert "searchControls" in changes[0]
+    assert changes[0] == "  searchControls:"
+    assert any(line.strip().endswith("→ {}") for line in changes[1:])
+
+
+def _agent_with_tools(tools):
+    return {"name": "My Agent", "model": "gemini-2.5-flash", "instructions": "Hello.", "tools": tools}
+
+
+def test_diff_detects_added_tool():
+    current = _agent_with_tools([{"type": "algolia_search_index", "indices": [{"index": "products"}]}])
+    new_payload = _agent_with_tools([
+        {"type": "algolia_search_index", "indices": [{"index": "products"}]},
+        {"type": "algolia_display_results", "isTerminal": True, "minResultsPerGroup": 1},
+    ])
+    changes = _diff(current, new_payload)
+    assert "  tools:" in changes
+    assert any(line.strip() == "+ algolia_display_results" for line in changes)
+
+
+def test_diff_detects_removed_tool():
+    """A payload that drops an existing tool (the silent-clobber case) is now visible."""
+    current = _agent_with_tools([
+        {"type": "algolia_search_index", "indices": [{"index": "products"}]},
+        {"type": "algolia_display_results", "isTerminal": True, "minResultsPerGroup": 1},
+    ])
+    new_payload = _agent_with_tools([{"type": "algolia_search_index", "indices": [{"index": "products"}]}])
+    changes = _diff(current, new_payload)
+    assert "  tools:" in changes
+    assert any(line.strip() == "- algolia_display_results" for line in changes)
+
+
+def test_diff_detects_tool_scalar_field_change():
+    current = _agent_with_tools([{"type": "algolia_display_results", "isTerminal": False, "minResultsPerGroup": 3}])
+    new_payload = _agent_with_tools([{"type": "algolia_display_results", "isTerminal": True, "minResultsPerGroup": 1}])
+    changes = _diff(current, new_payload)
+    assert any("algolia_display_results.isTerminal" in line and "False" in line and "True" in line for line in changes)
+    assert any("algolia_display_results.minResultsPerGroup" in line and "3" in line and "1" in line for line in changes)
+
+
+def test_diff_no_tool_change_when_identical():
+    agent = _agent_with_tools([
+        {"type": "algolia_search_index", "indices": [{"index": "products"}]},
+        {"type": "algolia_display_results", "isTerminal": True, "minResultsPerGroup": 1},
+    ])
+    assert not _diff(agent, dict(agent))
+
+
+def test_diff_no_tool_false_positive_from_api_expanded_fields():
+    """Tool-level fields the API adds but we never send (mode, description) must not diff."""
+    current = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "name": "algolia_search_index",
+        "mode": "static",
+        "allowUnlistedIndices": False,
+        "description": "API-added blurb.",
+        "indices": [{"index": "products"}],
+    }])
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "name": "algolia_search_index",
+        "indices": [{"index": "products"}],
+    }])
+    assert not _diff(current, new_payload)
+
+
+def test_diff_detects_predefined_search_parameters_change():
+    """predefinedSearchParameters lives at tool level; a change must not report as no-op."""
+    current = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+        "predefinedSearchParameters": {"hitsPerPage": 10},
+    }])
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+        "predefinedSearchParameters": {"hitsPerPage": 25},
+    }])
+    changes = _diff(current, new_payload)
+    assert any("algolia_search_index.predefinedSearchParameters" in line for line in changes)
+    assert any("25" in line for line in changes)
+
+
+def test_diff_detects_added_predefined_search_parameters():
+    current = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+    }])
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+        "predefinedSearchParameters": {"filters": "in_stock:true"},
+    }])
+    changes = _diff(current, new_payload)
+    assert any("algolia_search_index.predefinedSearchParameters" in line for line in changes)
+
+
+def test_diff_no_false_positive_when_predefined_params_unchanged():
+    """Only keys we send are compared — API-expanded defaults must not diff."""
+    current = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+        "predefinedSearchParameters": {
+            "hitsPerPage": 10,
+            "page": 0,
+            "responseFields": ["*"],
+        },
+    }])
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+        "predefinedSearchParameters": {"hitsPerPage": 10},
+    }])
+    assert not _diff(current, new_payload)
+
+
+def test_diff_detects_clearing_predefined_search_parameters():
+    """An empty object is compared unfiltered, so clearing is still visible."""
+    current = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+        "predefinedSearchParameters": {"hitsPerPage": 10},
+    }])
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+        "predefinedSearchParameters": {},
+    }])
+    changes = _diff(current, new_payload)
+    assert any("algolia_search_index.predefinedSearchParameters" in line for line in changes)
+
+
+def test_diff_detects_config_block_change():
+    current = _agent_with_tools([{"type": "algolia_search_index", "indices": [{"index": "products"}]}])
+    current["config"] = {"temperature": 0.2}
+    new_payload = _agent_with_tools([{"type": "algolia_search_index", "indices": [{"index": "products"}]}])
+    new_payload["config"] = {"temperature": 0.9}
+    changes = _diff(current, new_payload)
+    assert "  config:" in changes
+    assert any(line.strip().startswith("~ temperature:") and "0.9" in line for line in changes)
+
+
+def test_diff_no_config_change_when_identical():
+    agent = _agent_with_tools([{"type": "algolia_search_index", "indices": [{"index": "products"}]}])
+    agent["config"] = {"temperature": 0.2}
+    assert not _diff(agent, dict(agent))
+
+
+# ── issue #12: remaining false positives ──────────────────────────────────────
+
+def _agent_with_controls(controls):
+    return _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products", "description": "Products", "searchControls": controls}],
+    }])
+
+
+def test_diff_ignores_api_expanded_nulls_nested_in_search_controls():
+    """issue #12 case 1: the API adds null sub-fields inside values of keys we did send."""
+    current = _agent_with_controls({
+        "hitsPerPage": {"exposed": True, "default": 5, "constraint": {"min": None, "max": 5}},
+        "attributesToRetrieve": {"exposed": False, "constraint": None, "merge": None},
+    })
+    new_payload = _agent_with_controls({
+        "hitsPerPage": {"exposed": True, "default": 5, "constraint": {"max": 5}},
+        "attributesToRetrieve": {"exposed": False},
+    })
+    assert not _diff(current, new_payload)
+
+
+def test_diff_ignores_api_expanded_nulls_nested_in_predefined_params():
+    """Same nesting problem on the tool-level object path."""
+    current = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+        "predefinedSearchParameters": {"facetFilters": {"value": "a", "extra": None}},
+    }])
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products"}],
+        "predefinedSearchParameters": {"facetFilters": {"value": "a"}},
+    }])
+    assert not _diff(current, new_payload)
+
+
+def test_diff_still_detects_real_nested_search_controls_change():
+    """Pruning must not mask a genuine change to a nested value we do send."""
+    current = _agent_with_controls({"hitsPerPage": {"exposed": True, "default": 5}})
+    new_payload = _agent_with_controls({"hitsPerPage": {"exposed": True, "default": 20}})
+    changes = _diff(current, new_payload)
+    assert changes[0] == "  searchControls:"
+    assert any("products" in line and "20" in line for line in changes[1:])
+
+
+def test_diff_ignores_instructions_trailing_whitespace():
+    """issue #12 case 2: API-stored copy vs file on disk differing only by a newline."""
+    base = {"name": "My Agent", "model": "gemini-2.5-flash", "tools": []}
+    current = dict(base, instructions="line one\nline two\n")
+    new_payload = dict(base, instructions="line one\nline two")
+    assert not _diff(current, new_payload)
+
+
+def test_diff_still_detects_real_instructions_change():
+    base = {"name": "My Agent", "model": "gemini-2.5-flash", "tools": []}
+    current = dict(base, instructions="line one\n")
+    new_payload = dict(base, instructions="something else\n")
+    assert any("instructions" in line for line in _diff(current, new_payload))
+
+
+# ── PR #13 review findings ────────────────────────────────────────────────────
+
+def test_diff_names_the_index_whose_search_controls_changed():
+    """A change on one index must not print another index's (unchanged) values.
+
+    Sampling the first index produced output with identical-looking sides, announcing
+    a change the reader could not see.
+    """
+    def agent(sc_products, sc_replica):
+        return _agent_with_tools([{
+            "type": "algolia_search_index",
+            "indices": [
+                {"index": "products", "description": "d", "searchControls": sc_products},
+                {"index": "products_price_asc", "description": "d", "searchControls": sc_replica},
+            ],
+        }])
+
+    same = {"hitsPerPage": {"default": 5}}
+    changes = _diff(agent(same, same), agent(same, {"hitsPerPage": {"default": 99}}))
+    assert changes[0] == "  searchControls:"
+    changed = [line for line in changes[1:]]
+    assert len(changed) == 1, changed
+    assert changed[0].strip().startswith("products_price_asc:")
+    assert "99" in changed[0]
+    # No line may show identical values on both sides.
+    for line in changed:
+        before, _, after = line.partition(" → ")
+        assert before.split(": ", 1)[1] != after
+
+
+def test_diff_detects_leading_whitespace_change_in_instructions():
+    """Only trailing whitespace is noise; leading indentation is content."""
+    base = {"name": "My Agent", "model": "gemini-2.5-flash", "tools": []}
+    current = dict(base, instructions="line one\nline two")
+    new_payload = dict(base, instructions="\n\nline one\nline two")
+    assert any("instructions" in line for line in _diff(current, new_payload))
+
+
+def test_diff_reports_config_keys_that_will_be_destroyed():
+    """PATCH replaces the config object, so keys absent from the payload are deleted.
+
+    Verified against the live API: a payload carrying only "suggestions" reduced a
+    4-key config to 1. Pruning the current side to the payload's keys would report
+    "no change" for exactly that update, which is false assurance.
+    """
+    current = _agent_with_tools([{"type": "algolia_search_index", "indices": [{"index": "products"}]}])
+    current["config"] = {
+        "suggestions": {"enabled": True},
+        "enableAlgoliaMcp": True,
+        "feedback": {"enabled": True},
+        "max_iterations": 25,
+    }
+    new_payload = _agent_with_tools([{"type": "algolia_search_index", "indices": [{"index": "products"}]}])
+    new_payload["config"] = {"suggestions": {"enabled": True}}
+
+    changes = _diff(current, new_payload)
+    assert "  config:" in changes
+    removed = [line for line in changes if line.strip().startswith("-")]
+    assert len(removed) == 3, removed
+    for key in ("enableAlgoliaMcp", "feedback", "max_iterations"):
+        assert any(key in line for line in removed), key
+    assert all("will be removed" in line for line in removed)
+
+
+def test_diff_reports_search_controls_that_will_be_wiped():
+    """Omitting searchControls from the payload deletes them, so silence is wrong.
+
+    Verified against the live API: a PATCH whose index entries carry no
+    searchControls key left the stored value null. The old `new_has_sc` gate skipped
+    comparison in exactly this case, reporting nothing for a destructive update.
+    """
+    sc = {"hitsPerPage": {"exposed": True, "default": 7, "constraint": {"min": 2, "max": 42}}}
+    current = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products", "description": "d", "searchControls": sc}],
+    }])
+    # What build_tool() emits when the config file has no searchControls key.
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products", "description": "d"}],
+    }])
+    changes = _diff(current, new_payload)
+    assert "  searchControls:" in changes
+    assert any("products" in line and "will be removed" in line for line in changes[1:])
+
+
+def test_diff_quiet_when_neither_side_has_search_controls():
+    """Removing the gate must not make no-searchControls agents noisy."""
+    agent = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [{"index": "products", "description": "d"}],
+    }])
+    assert not _diff(agent, dict(agent))
+
+
+def test_diff_reports_wipe_per_index_only_where_present():
+    """Only indices that actually lose controls are named."""
+    sc = {"hitsPerPage": {"exposed": True, "default": 7}}
+    current = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [
+            {"index": "products", "description": "d", "searchControls": sc},
+            {"index": "products_asc", "description": "d"},
+        ],
+    }])
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "indices": [
+            {"index": "products", "description": "d"},
+            {"index": "products_asc", "description": "d"},
+        ],
+    }])
+    changes = _diff(current, new_payload)
+    named = [line for line in changes if line.startswith("    ")]
+    assert len(named) == 1, named
+    assert "products:" in named[0] and "products_asc" not in named[0]
+
+
+def test_diff_reports_tool_fields_that_revert_to_default():
+    """Fields the payload omits revert, because the tool object is replaced not merged.
+
+    Verified against the live API: a PATCH omitting them turned mode "dynamic" into
+    "static" and allowUnlistedIndices true into false.
+    """
+    current = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "name": "algolia_search_index",
+        "mode": "dynamic",
+        "allowUnlistedIndices": True,
+        "description": "API-regenerated blurb.",
+        "indices": [{"index": "products", "description": "d"}],
+    }])
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index",
+        "name": "algolia_search_index",
+        "indices": [{"index": "products", "description": "d"}],
+    }])
+    changes = _diff(current, new_payload)
+    assert "  tools:" in changes
+    reverts = [line for line in changes if "default (not sent)" in line]
+    assert len(reverts) == 2, reverts
+    assert any("mode" in line and "dynamic" in line for line in reverts)
+    assert any("allowUnlistedIndices" in line for line in reverts)
+    # The API regenerates tool description, so it must not be reported.
+    assert not any("description" in line for line in reverts)
+
+
+def test_diff_ignores_null_tool_fields_not_sent():
+    """A field already null loses nothing by being omitted."""
+    current = _agent_with_tools([{
+        "type": "algolia_search_index", "name": "algolia_search_index",
+        "mode": None, "allowUnlistedIndices": None,
+        "indices": [{"index": "products", "description": "d"}],
+    }])
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index", "name": "algolia_search_index",
+        "indices": [{"index": "products", "description": "d"}],
+    }])
+    assert not _diff(current, new_payload)
