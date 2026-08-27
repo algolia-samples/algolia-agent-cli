@@ -296,6 +296,19 @@ _TOOL_FIELD_DEFAULTS = {"mode": "static", "allowUnlistedIndices": False}
 _TOOL_IDENTITY = {"name", "type", "indices", "description"}
 
 
+def _omitted_field_note(field: str, curr_val) -> str:
+    """Describe what happens to a field the payload leaves out.
+
+    The API replaces the tool object, so an omitted field takes its default. Name that
+    default when it is known rather than just saying "default", which reads as though
+    the current value were the default.
+    """
+    default = _TOOL_FIELD_DEFAULTS.get(field, _MISSING)
+    if default is _MISSING:
+        return f"{_fmt(curr_val)} would be dropped from the payload"
+    return f"{_fmt(curr_val)} would revert to its default of {_fmt(default)}"
+
+
 def _tool_key(tool: dict) -> str:
     """Identity of a tool within the tools array."""
     return tool.get("type") or tool.get("name") or ""
@@ -433,8 +446,10 @@ def _diff(current: dict, new_payload: dict) -> list[str]:
                 curr_val = curr_tools[key][k]
                 if curr_val is None or curr_val == _TOOL_FIELD_DEFAULTS.get(k, _MISSING):
                     continue  # already at its default; omitting it changes nothing
+                default = _TOOL_FIELD_DEFAULTS.get(k, _MISSING)
+                becomes = "dropped" if default is _MISSING else _fmt(default)
                 tool_lines.append(
-                    f"    ~ {key}.{k}: {_fmt(curr_val)} → default (not sent)"
+                    f"    ~ {key}.{k}: {_fmt(curr_val)} → {becomes} (not sent)"
                 )
     if tool_lines:
         lines.append("  tools:")
@@ -485,7 +500,7 @@ def _removals(current: dict, new_payload: dict) -> list[str]:
             val = curr_tools[key][field]
             if val is None or val == _TOOL_FIELD_DEFAULTS.get(field, _MISSING):
                 continue  # already at its default; omitting it changes nothing
-            out.append(f"  - {key}.{field} would revert to its default (now {_fmt(val)})")
+            out.append(f"  - {key}.{field}: {_omitted_field_note(field, val)}")
 
     curr_sc = {
         i["index"]: i.get("searchControls")
@@ -603,12 +618,13 @@ def cmd_update(client: AlgoliaAgentClient, args: argparse.Namespace):
     # agent silently deletes the difference. Refuse rather than destroy.
     removals = _removals(current, new_payload)
     if removals and not getattr(args, "force", False):
+        source = f"{config_path}" if config_path else "the fields you supplied"
         raise SystemExit(
             "ERROR: this update would remove configuration the agent currently has:\n"
             + "\n".join(removals)
             + "\n\nThe Agent Studio API replaces these fields instead of merging them, so\n"
-            "anything missing from the payload is lost. agent-config.json cannot express\n"
-            "them, which is why they are absent.\n\n"
+            f"anything missing from the payload is lost. {source} cannot express them,\n"
+            "which is why they are absent.\n\n"
             "Either add the values to your config, or pass --force to accept the removals.\n"
             "Run the same command with --dry-run to see the full diff first."
         )

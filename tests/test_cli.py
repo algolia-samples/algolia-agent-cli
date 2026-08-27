@@ -1311,12 +1311,28 @@ def test_diff_reports_tool_fields_that_revert_to_default():
     }])
     changes = _diff(current, new_payload)
     assert "  tools:" in changes
-    reverts = [line for line in changes if "default (not sent)" in line]
+    reverts = [line for line in changes if "(not sent)" in line]
     assert len(reverts) == 2, reverts
-    assert any("mode" in line and "dynamic" in line for line in reverts)
-    assert any("allowUnlistedIndices" in line for line in reverts)
+    # The actual default is named, not just the word "default".
+    assert any("mode" in line and "'dynamic' → 'static'" in line for line in reverts)
+    assert any("allowUnlistedIndices" in line and "True → False" in line for line in reverts)
     # The API regenerates tool description, so it must not be reported.
     assert not any("description" in line for line in reverts)
+
+
+def test_diff_says_dropped_when_the_default_is_unknown():
+    """Only mode and allowUnlistedIndices have known defaults; be honest about the rest."""
+    current = _agent_with_tools([{
+        "type": "algolia_search_index", "name": "algolia_search_index",
+        "someFutureField": 42,
+        "indices": [{"index": "products", "description": "d"}],
+    }])
+    new_payload = _agent_with_tools([{
+        "type": "algolia_search_index", "name": "algolia_search_index",
+        "indices": [{"index": "products", "description": "d"}],
+    }])
+    changes = _diff(current, new_payload)
+    assert any("someFutureField: 42 → dropped (not sent)" in line for line in changes)
 
 
 def test_diff_ignores_null_tool_fields_not_sent():
@@ -1371,7 +1387,7 @@ def test_removals_lists_every_loss_the_config_cannot_express():
     out = _removals(_rich_current_agent(), _narrow_payload())
     joined = "\n".join(out)
     assert "'algolia_display_results' tool would be deleted" in joined
-    assert "algolia_search_index.mode" in joined and "dynamic" in joined
+    assert "algolia_search_index.mode: 'dynamic' would revert to its default of 'static'" in joined
     assert "algolia_search_index.allowUnlistedIndices" in joined
     assert "searchControls on 'products' would be wiped" in joined
     assert "config key 'memory'" in joined
@@ -1478,3 +1494,33 @@ def test_update_allowed_when_nothing_is_removed(tmp_path):
     args = build_parser().parse_args(["update", "agent-uuid", "--config", str(config)])
     cmd_update(mock_client, args)
     mock_client.update_agent.assert_called_once()
+
+
+def test_removals_names_the_supplied_config_path(tmp_path):
+    """update accepts --config with any path, so the message must not hard-code one."""
+    from algolia_agent.cli import cmd_update
+
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = _rich_current_agent()
+    prompt = tmp_path / "PROMPT.md"
+    prompt.write_text("Old instructions.")
+    config = tmp_path / "my-custom-name.json"
+    config.write_text(json.dumps({
+        "name": "Rich Agent", "model": "gemini-2.5-flash", "instructions": str(prompt),
+        "index": "products", "index_description": "Product catalog.",
+        "config": {"suggestions": {"enabled": True}},
+    }))
+    args = build_parser().parse_args(["update", "agent-uuid", "--config", str(config)])
+    with pytest.raises(SystemExit) as exc:
+        cmd_update(mock_client, args)
+    assert "my-custom-name.json" in str(exc.value)
+    assert "agent-config.json" not in str(exc.value)
+
+
+def test_removals_says_dropped_for_unknown_default():
+    from algolia_agent.cli import _removals
+
+    current = _rich_current_agent()
+    current["tools"][0]["someFutureField"] = 42
+    out = "\n".join(_removals(current, _narrow_payload()))
+    assert "someFutureField: 42 would be dropped from the payload" in out
