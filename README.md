@@ -77,6 +77,26 @@ overwrite existing files without `--force`, and warns before replacing a prompt 
 containing `{{template}}` variables — a snapshot holds rendered text and cannot recover
 a local template.
 
+### Cloning an agent
+
+Because `create` also accepts a native config, a snapshot is a complete clone source:
+
+```bash
+algolia-agent snapshot <source_id> -o clone/agent-config.json
+# edit the name in clone/agent-config.json
+algolia-agent create --config clone/agent-config.json
+```
+
+The copy carries everything the friendly format cannot express — extra tools, `mode`,
+`allowUnlistedIndices`, per-index `searchControls`, the full `config` block. Two
+differences by design: `status` is forced to `draft`, since creating from a snapshot of a
+live agent should not silently publish the copy, and a native config must carry
+`providerId` directly (there is no provider-name lookup on that path — use
+`algolia-agent providers` to find one).
+
+Snapshot each agent into its own directory. `PROMPT.md` is the default prompt filename,
+so two snapshots in one directory collide — `snapshot` refuses rather than overwriting.
+
 Agent Studio's own templates ship prompts containing placeholders such as
 `{{INSERT_BRAND}}` and `{{INSERT_LANGUAGE}}`. A snapshot preserves them verbatim, since
 a native config is literal — fill them in by editing `PROMPT.md` and running `update`

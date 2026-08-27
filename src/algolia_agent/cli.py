@@ -195,10 +195,24 @@ def cmd_providers(client: AlgoliaAgentClient, args: argparse.Namespace):
         print()
 
 
+def _report_created(agent: dict, args: argparse.Namespace):
+    if args.json:
+        print(json.dumps({"id": agent["id"], "name": agent["name"], "status": agent["status"]}))
+        return
+    print(f"Created agent: {agent['name']}")
+    print(f"Agent ID:      {agent['id']}")
+    print(f"Status:        {agent['status']}")
+    print(f"\nTo publish: algolia-agent publish {agent['id']}")
+
+
 def cmd_create(client: AlgoliaAgentClient, args: argparse.Namespace):
     # Load and merge config; auto-detect agent-config.json if --config not given
     config_path = args.config or (Path("agent-config.json") if Path("agent-config.json").exists() else None)
     file_config = load_config(config_path) if config_path else {}
+    if is_native_config(file_config):
+        _create_from_native(client, args, file_config, config_path)
+        return
+
     config = merge_config(file_config, args)
 
     # Auto-detect PROMPT.md if instructions not specified
@@ -272,16 +286,7 @@ def cmd_create(client: AlgoliaAgentClient, args: argparse.Namespace):
     if config.get("config"):
         payload["config"] = config["config"]
 
-    agent = client.create_agent(payload)
-
-    if args.json:
-        print(json.dumps({"id": agent["id"], "name": agent["name"], "status": agent["status"]}))
-        return
-
-    print(f"Created agent: {agent['name']}")
-    print(f"Agent ID:      {agent['id']}")
-    print(f"Status:        {agent['status']}")
-    print(f"\nTo publish: algolia-agent publish {agent['id']}")
+    _report_created(client.create_agent(payload), args)
 
 
 _MISSING = object()
@@ -669,7 +674,7 @@ def _native_payload(config: dict, config_path, args) -> dict:
             "own templates ship placeholders like {{INSERT_BRAND}}, and substituting them\n"
             "on every update would overwrite them.\n\n"
             f"To fill them in, edit {config.get('instructions') or 'the prompt file'} "
-            "directly and run update again.\n"
+            "directly and run the command again.\n"
             "For templating across several agents, use the friendly config format "
             "(index/replicas)."
         )
@@ -702,6 +707,37 @@ def _native_payload(config: dict, config_path, args) -> dict:
         if val is not None:
             payload[key] = val
     return payload
+
+
+def _create_from_native(client, args, file_config: dict, config_path):
+    """Create an agent from a native config — a snapshot, usually of another agent.
+
+    Unlike update there is no prior state to lose, so no guard is needed. The payload
+    is sent as the file describes it, with one exception: status is forced to draft.
+    Creating from a snapshot of a live agent should not silently publish the copy, and
+    `create` is documented as producing a draft.
+    """
+    payload = _native_payload(file_config, config_path, args)
+
+    missing = [k for k in ("name", "providerId", "model") if not payload.get(k)]
+    if missing:
+        raise SystemExit(
+            f"ERROR: native config is missing required fields: {', '.join(missing)}\n"
+            "A native config carries providerId directly rather than a provider name; "
+            "run `algolia-agent providers` to look one up."
+        )
+
+    payload["status"] = "draft"
+
+    if args.dry_run:
+        print("=== CREATE DRY RUN (native config) ===")
+        print(f"  Source: {config_path}")
+        print(f"  Tools:  {', '.join(t.get('type') or '?' for t in payload.get('tools') or []) or 'none'}")
+        print("\nPayload:")
+        print(json.dumps(payload, indent=2))
+        return
+
+    _report_created(client.create_agent(payload), args)
 
 
 def _apply_update(client, args, current: dict, new_payload: dict, config_path=None,

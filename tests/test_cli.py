@@ -1866,3 +1866,108 @@ def test_snapshot_overwrite_hint_names_the_real_flags(tmp_path):
     assert "-o/--output" in msg
     assert "--instructions-file" in msg
     assert "-o/--instructions-file" not in msg
+
+
+# ── native create (#14 phase 3) ───────────────────────────────────────────────
+
+def _native_create_config(tmp_path, **overrides):
+    (tmp_path / "PROMPT.md").write_text("You are the {{INSERT_BRAND}} assistant.\n")
+    config = {
+        "name": "Shopping assistant", "providerId": "provider-uuid",
+        "model": "claude-fable-5", "status": "published",
+        "templateType": "shopping-assistant", "instructions": "PROMPT.md",
+        "tools": [{"name": "algolia_search_index", "type": "algolia_search_index",
+                   "mode": "dynamic", "allowUnlistedIndices": True,
+                   "indices": [{"index": "products", "description": "Catalog.",
+                                "searchControls": {"distinct": {"exposed": True, "default": False}}}]},
+                  {"name": "algolia_display_results", "type": "algolia_display_results",
+                   "isTerminal": False, "maxGroups": 3}],
+        "config": {"suggestions": {"enabled": True}, "memory": {"enabled": True}},
+    }
+    config.update(overrides)
+    path = tmp_path / "agent-config.json"
+    path.write_text(json.dumps(config))
+    return path
+
+
+def test_create_from_native_sends_everything_and_forces_draft(tmp_path):
+    from algolia_agent.cli import cmd_create
+
+    path = _native_create_config(tmp_path)
+    mock_client = MagicMock()
+    mock_client.create_agent.return_value = {"id": "new-uuid", "name": "Shopping assistant",
+                                             "status": "draft"}
+    cmd_create(mock_client, build_parser().parse_args(["create", "--config", str(path)]))
+
+    payload = mock_client.create_agent.call_args.args[0]
+    # A snapshot of a live agent must not silently publish the copy.
+    assert payload["status"] == "draft"
+    # Everything the friendly format cannot express survives.
+    assert [t["type"] for t in payload["tools"]] == ["algolia_search_index",
+                                                     "algolia_display_results"]
+    assert payload["tools"][0]["mode"] == "dynamic"
+    assert payload["tools"][0]["allowUnlistedIndices"] is True
+    assert payload["tools"][0]["indices"][0]["searchControls"] is not None
+    assert sorted(payload["config"]) == ["memory", "suggestions"]
+    assert payload["templateType"] == "shopping-assistant"
+    assert payload["providerId"] == "provider-uuid"
+    # No provider-name resolution happens on this path.
+    mock_client.resolve_provider_id.assert_not_called()
+    # Literal, not rendered.
+    assert "{{INSERT_BRAND}}" in payload["instructions"]
+
+
+def test_create_from_native_requires_provider_id(tmp_path):
+    from algolia_agent.cli import cmd_create
+
+    path = _native_create_config(tmp_path, providerId=None)
+    with pytest.raises(SystemExit) as exc:
+        cmd_create(MagicMock(), build_parser().parse_args(["create", "--config", str(path)]))
+    msg = str(exc.value)
+    assert "providerId" in msg
+    assert "algolia-agent providers" in msg
+
+
+def test_create_from_native_dry_run_needs_no_client(tmp_path, capsys):
+    """_main calls cmd_create(None, args) for --dry-run, so this path must not use it."""
+    from algolia_agent.cli import cmd_create
+
+    path = _native_create_config(tmp_path)
+    cmd_create(None, build_parser().parse_args(
+        ["create", "--config", str(path), "--dry-run"]))
+    out = capsys.readouterr().out
+    assert "CREATE DRY RUN (native config)" in out
+    assert '"status": "draft"' in out
+    assert "algolia_display_results" in out
+
+
+def test_create_from_native_rejects_friendly_flags(tmp_path):
+    from algolia_agent.cli import cmd_create
+
+    path = _native_create_config(tmp_path)
+    for extra, expected in ([["--index", "p"], "--index"], [["--var", "INSERT_BRAND=x"], "--var"]):
+        with pytest.raises(SystemExit) as exc:
+            cmd_create(MagicMock(), build_parser().parse_args(
+                ["create", "--config", str(path)] + extra))
+        assert expected in str(exc.value)
+
+
+def test_create_friendly_path_unaffected(tmp_path):
+    """The friendly format must still resolve a provider name and build one tool."""
+    from algolia_agent.cli import cmd_create
+
+    (tmp_path / "PROMPT.md").write_text("Hello.")
+    path = tmp_path / "agent-config.json"
+    path.write_text(json.dumps({
+        "name": "Friendly", "provider": "hackathon-gemini", "model": "gemini-3.5-flash",
+        "instructions": "PROMPT.md", "index": "products",
+    }))
+    mock_client = MagicMock()
+    mock_client.resolve_provider_id.return_value = "provider-uuid"
+    mock_client.create_agent.return_value = {"id": "x", "name": "Friendly", "status": "draft"}
+    cmd_create(mock_client, build_parser().parse_args(["create", "--config", str(path)]))
+
+    mock_client.resolve_provider_id.assert_called_once_with("hackathon-gemini")
+    payload = mock_client.create_agent.call_args.args[0]
+    assert payload["providerId"] == "provider-uuid"
+    assert [t["type"] for t in payload["tools"]] == ["algolia_search_index"]
