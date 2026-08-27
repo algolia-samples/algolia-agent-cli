@@ -213,25 +213,30 @@ and the instructions file in a single pass — missing vars are reported togethe
 one block is applied to **every** index (primary + replicas); the service itself stores
 them per index, so a native config from `snapshot` can differ index by index.
 
-Set `exposed: true` to let the LLM vary the value within its constraint; `exposed: false`
-to fix it.
+`exposed: true` lets the LLM choose the value at query time; `exposed: false` fixes it at
+`default`. Where a `constraint` is present and set, it bounds what the LLM may choose.
 
-The parameters do **not** share one shape — `constraint` appears only on the numeric
-ones, `merge` only on the list-valued ones:
+The parameters do **not** share one shape:
 
 | Parameter | Sub-fields | What it does |
 |---|---|---|
-| `hitsPerPage` | `exposed`, `default`, `constraint: {min, max}` | Limit result count. Set `constraint.max` to cap it. |
-| `page` | `exposed`, `default`, `constraint: {min, max}` | Limit pagination depth. |
+| `hitsPerPage` | `exposed`, `default`, `constraint` | Limit result count. Set `constraint.max` to cap it. |
+| `page` | `exposed`, `default`, `constraint` | Limit pagination depth. |
 | `attributesToRetrieve` | `exposed`, `default: []`, `constraint`, `merge` | Restrict which attributes each hit returns — useful for trimming the LLM payload. |
 | `responseFields` | `exposed`, `default: []`, `constraint`, `merge` | Restrict which top-level response fields are returned. |
-| `distinct` | `exposed`, `default` (boolean) | De-duplicate results. No `constraint`. |
-| `facets` | `exposed`, `default: []` | Control which facet attributes the response returns. No `constraint`. |
-| `query` | — | Present in the API's representation but not observed carrying a value. |
-| `custom` | — | Present in the API's representation but not observed carrying a value. |
+| `distinct` | `exposed`, `default` (boolean) | De-duplicate results. No `constraint`, no `merge`. |
+| `facets` | `exposed`, `default: []` | Control which facet attributes the response returns. No `constraint`, no `merge`. |
+| `query` | — | Present in the API's representation, not observed carrying a value. |
+| `custom` | — | Present in the API's representation, not observed carrying a value. |
+
+Four parameters carry a `constraint` key, but only `hitsPerPage` was ever observed with
+one populated, as `{min, max}`. `attributesToRetrieve` and `responseFields` additionally
+carry `merge`, which was `null` in every record inspected — so its purpose and shape are
+unknown, and `constraint` on those two may not take the `{min, max}` form.
 
 This table was derived by inspecting live agents rather than from a published schema, so
-treat `query`, `custom` and the semantics of `merge` as unconfirmed. The service returns
+treat `query`, `custom`, `merge`, and any `constraint` beyond `hitsPerPage` as
+unconfirmed. The service returns
 all eight keys with `null` for anything unset, and it expands the ones you do send with
 its own defaults — which is why `--dry-run` compares only the keys your config actually
 specifies.
