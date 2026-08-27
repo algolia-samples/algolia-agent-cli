@@ -33,12 +33,53 @@ algolia-agent list                     # List all agents
 algolia-agent get <agent_id>           # Full agent config
 algolia-agent providers                # List available LLM providers
 algolia-agent create [options]         # Create a draft agent
+algolia-agent snapshot <agent_id>      # Write a full config file from the agent's current state
 algolia-agent update <agent_id> [options]  # Update an existing agent
 algolia-agent publish <agent_id>       # Publish a draft agent
 algolia-agent delete <agent_id> --confirm
 ```
 
 Add `--json` to any command except `init` for machine-readable output.
+
+## Config formats
+
+There are two shapes of `agent-config.json`, and the CLI tells them apart by whether a
+`tools` array is present.
+
+**Friendly** — describes an agent with `index`, `replicas`, a `provider` name, an
+`instructions` file path, and `{{template}}` variables. Best for provisioning several
+agents from one spec. This is what `init` scaffolds.
+
+**Native** — the API's own representation, written by `snapshot`. Carries everything the
+service stores, including things the friendly format cannot express: additional tools,
+`mode`, `allowUnlistedIndices`, and per-index `searchControls`. A native config is
+**literal**: `{{...}}` in a prompt is text to preserve, not a variable to substitute, so
+`--var` is rejected. `--index`, `--replica` and `--provider` are rejected too; edit the
+file instead.
+
+## Snapshots
+
+`update` sends a whole payload, and the API **replaces** `config`, the `tools` array and
+per-index `searchControls` rather than merging them — so anything a config file cannot
+express would be deleted. `update` refuses to do that, and `snapshot` is the remedy:
+
+```bash
+algolia-agent snapshot <agent_id>                       # -> agent-config.json + PROMPT.md
+algolia-agent update <agent_id> --dry-run               # -> "No changes detected."
+```
+
+That round-trip is worth running after any snapshot: it is a completeness check. A clean
+dry-run means the file holds everything the service does, so editing one value and
+applying it changes only that value.
+
+`snapshot` also writes `SYSTEM.md` when the agent has a system prompt, refuses to
+overwrite existing files without `--force`, and warns before replacing a prompt file
+containing `{{template}}` variables — a snapshot holds rendered text and cannot recover
+a local template.
+
+Note that a snapshot is a point-in-time copy. If someone edits the agent in the
+dashboard afterwards, applying an older snapshot reverts them; `--dry-run` shows exactly
+what would change before you commit to it.
 
 ## Getting started: `init`
 

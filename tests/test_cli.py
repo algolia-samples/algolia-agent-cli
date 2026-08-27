@@ -1524,3 +1524,221 @@ def test_removals_says_dropped_for_unknown_default():
     current["tools"][0]["someFutureField"] = 42
     out = "\n".join(_removals(current, _narrow_payload()))
     assert "someFutureField: 42 would be dropped from the payload" in out
+
+
+# ── snapshot / native config (#14 phase 2) ────────────────────────────────────
+
+def _server_agent():
+    return {
+        "id": "agent-uuid", "createdAt": "2026-01-01T00:00:00Z",
+        "updatedAt": "2026-01-02T00:00:00Z", "lastUsedAt": None,
+        "name": "Rich Agent", "providerId": "provider-uuid", "model": "gemini-3.5-flash",
+        "instructions": "Line one.\nLine two.\n", "status": "published",
+        "description": None, "systemPrompt": None, "templateType": "blank",
+        "tools": [
+            {"name": "algolia_search_index", "type": "algolia_search_index",
+             "mode": "dynamic", "allowUnlistedIndices": True, "description": "API blurb.",
+             "indices": [{"index": "products", "description": "Catalog.",
+                          "enhancedDescription": "Available Facets...",
+                          "searchControls": {"hitsPerPage": {"exposed": True, "default": 7}},
+                          "searchParameters": None}]},
+            {"name": "algolia_display_results", "type": "algolia_display_results",
+             "isTerminal": False, "maxGroups": 3},
+        ],
+        "config": {"suggestions": {"enabled": True}, "memory": {"enabled": True}},
+    }
+
+
+def test_build_snapshot_drops_only_server_owned_fields():
+    from algolia_agent.cli import build_snapshot
+
+    snap = build_snapshot(_server_agent(), "PROMPT.md")
+    for gone in ("id", "createdAt", "updatedAt", "lastUsedAt"):
+        assert gone not in snap
+    # Everything else survives, including what the friendly format cannot express.
+    assert snap["tools"][0]["mode"] == "dynamic"
+    assert snap["tools"][0]["allowUnlistedIndices"] is True
+    assert snap["tools"][1]["type"] == "algolia_display_results"
+    assert snap["config"]["memory"] == {"enabled": True}
+    assert snap["templateType"] == "blank"
+    assert snap["providerId"] == "provider-uuid"
+    # enhancedDescription is platform-generated, so it would only go stale in a file.
+    assert "enhancedDescription" not in snap["tools"][0]["indices"][0]
+    assert snap["tools"][0]["indices"][0]["searchControls"] is not None
+    # Instructions are externalised to a path, matching the friendly format's meaning.
+    assert snap["instructions"] == "PROMPT.md"
+
+
+def test_build_snapshot_externalises_system_prompt_only_when_present():
+    from algolia_agent.cli import build_snapshot
+
+    agent = _server_agent()
+    assert "systemPrompt" not in build_snapshot(agent, "PROMPT.md", "SYSTEM.md") or \
+        build_snapshot(agent, "PROMPT.md", "SYSTEM.md")["systemPrompt"] is None
+
+    agent["systemPrompt"] = "You are terse."
+    snap = build_snapshot(agent, "PROMPT.md", "SYSTEM.md")
+    assert snap["systemPrompt"] == "SYSTEM.md"
+
+
+def test_is_native_config_distinguishes_the_two_formats():
+    from algolia_agent.cli import is_native_config
+
+    assert is_native_config({"tools": [], "name": "x"})       # empty tools is still native
+    assert is_native_config({"tools": [{"type": "t"}]})
+    assert not is_native_config({"index": "products", "name": "x"})
+    assert not is_native_config({})
+
+
+def test_snapshot_round_trips_with_no_diff(tmp_path):
+    """The completeness oracle: a snapshot sent straight back must be a no-op.
+
+    Any field build_snapshot() fails to carry shows up here as a phantom diff.
+    """
+    from algolia_agent.cli import build_snapshot, _native_payload, _diff
+
+    agent = _server_agent()
+    snap = build_snapshot(agent, "PROMPT.md")
+    config_path = tmp_path / "agent-config.json"
+    config_path.write_text(json.dumps(snap))
+    (tmp_path / "PROMPT.md").write_text(agent["instructions"])
+
+    args = build_parser().parse_args(["update", "agent-uuid", "--config", str(config_path)])
+    payload = _native_payload(snap, config_path, args)
+    assert _diff(agent, payload) == []
+    from algolia_agent.cli import _removals
+    assert _removals(agent, payload) == []
+
+
+def test_native_config_preserves_literal_template_markers(tmp_path):
+    """Live agents carry literal {{...}} in prompts; a snapshot must not resolve them."""
+    from algolia_agent.cli import _native_payload
+
+    prompt = tmp_path / "PROMPT.md"
+    prompt.write_text("You are the {{INSERT_BRAND}} assistant. Show {{5}} results.")
+    config = {"name": "A", "providerId": "p", "model": "m", "status": "draft",
+              "instructions": "PROMPT.md", "tools": []}
+    config_path = tmp_path / "agent-config.json"
+    config_path.write_text(json.dumps(config))
+
+    args = build_parser().parse_args(["update", "agent-uuid", "--config", str(config_path)])
+    payload = _native_payload(config, config_path, args)
+    assert "{{INSERT_BRAND}}" in payload["instructions"]
+    assert "{{5}}" in payload["instructions"]
+
+
+def test_native_config_rejects_var_and_index(tmp_path):
+    from algolia_agent.cli import _native_payload
+
+    config = {"name": "A", "providerId": "p", "model": "m", "tools": []}
+    config_path = tmp_path / "agent-config.json"
+    config_path.write_text(json.dumps(config))
+
+    for extra, expected in ([["--var", "x=1"], "--var"], [["--index", "products"], "--index"]):
+        args = build_parser().parse_args(
+            ["update", "agent-uuid", "--config", str(config_path)] + extra)
+        with pytest.raises(SystemExit) as exc:
+            _native_payload(config, config_path, args)
+        assert expected in str(exc.value)
+
+
+def test_cmd_snapshot_writes_both_files_and_refuses_to_clobber(tmp_path, capsys):
+    from algolia_agent.cli import cmd_snapshot
+
+    agent = _server_agent()
+    agent["systemPrompt"] = "You are terse."
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = agent
+    out = tmp_path / "agent-config.json"
+    args = build_parser().parse_args(["snapshot", "agent-uuid", "-o", str(out)])
+    cmd_snapshot(mock_client, args)
+
+    written = json.loads(out.read_text())
+    assert written["instructions"] == "PROMPT.md"
+    assert written["systemPrompt"] == "SYSTEM.md"
+    assert (tmp_path / "PROMPT.md").read_text() == "Line one.\nLine two.\n"
+    assert (tmp_path / "SYSTEM.md").read_text() == "You are terse.\n"
+
+    # Second run must refuse rather than clobber.
+    with pytest.raises(SystemExit) as exc:
+        cmd_snapshot(mock_client, build_parser().parse_args(
+            ["snapshot", "agent-uuid", "-o", str(out)]))
+    assert "refusing to overwrite" in str(exc.value)
+
+
+def test_cmd_snapshot_warns_before_replacing_a_templated_prompt(tmp_path, capsys):
+    """A local template cannot be recovered from rendered server state."""
+    from algolia_agent.cli import cmd_snapshot
+
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = _server_agent()
+    out = tmp_path / "agent-config.json"
+    out.write_text("{}")
+    (tmp_path / "PROMPT.md").write_text("Hello {{event_name}} from {{booth}}.")
+
+    cmd_snapshot(mock_client, build_parser().parse_args(
+        ["snapshot", "agent-uuid", "-o", str(out), "--force"]))
+    err = capsys.readouterr().err
+    assert "contains template variables" in err
+    assert "PROMPT.md" in err
+
+
+def test_cmd_snapshot_no_warning_for_a_plain_prompt(tmp_path, capsys):
+    from algolia_agent.cli import cmd_snapshot
+
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = _server_agent()
+    out = tmp_path / "agent-config.json"
+    out.write_text("{}")
+    (tmp_path / "PROMPT.md").write_text("No variables here.")
+
+    cmd_snapshot(mock_client, build_parser().parse_args(
+        ["snapshot", "agent-uuid", "-o", str(out), "--force"]))
+    assert "template variables" not in capsys.readouterr().err
+
+
+def test_diff_detects_system_prompt_change():
+    base = {"name": "A", "model": "m", "instructions": "x", "tools": []}
+    current = dict(base, systemPrompt="You are terse.")
+    new_payload = dict(base, systemPrompt="You are verbose.\nVery.")
+    changes = _diff(current, new_payload)
+    assert any("systemPrompt: changed" in line for line in changes)
+
+
+def test_diff_ignores_system_prompt_trailing_newline():
+    """The file round-trip adds a newline the stored value never had."""
+    base = {"name": "A", "model": "m", "instructions": "x", "tools": []}
+    current = dict(base, systemPrompt="You are terse.")
+    new_payload = dict(base, systemPrompt="You are terse.\n")
+    assert not _diff(current, new_payload)
+
+
+def test_diff_silent_on_omitted_preserved_fields():
+    """description/systemPrompt/templateType survive omission, so absence is no change."""
+    current = {"name": "A", "model": "m", "instructions": "x", "tools": [],
+               "description": "Set.", "systemPrompt": "Set.", "templateType": "blank"}
+    new_payload = {"name": "A", "model": "m", "instructions": "x", "tools": []}
+    assert not _diff(current, new_payload)
+
+
+def test_diff_detects_provider_change():
+    """A provider switch previously reported nothing at all."""
+    base = {"name": "A", "model": "m", "instructions": "x", "tools": []}
+    changes = _diff(dict(base, providerId="old-uuid"), dict(base, providerId="new-uuid"))
+    assert any("providerId" in line and "new-uuid" in line for line in changes)
+
+
+def test_native_read_strips_trailing_newline(tmp_path):
+    """snapshot -> update must be a true no-op, not merely diff-clean."""
+    from algolia_agent.cli import _native_payload
+
+    (tmp_path / "PROMPT.md").write_text("Body text.\n")
+    (tmp_path / "SYSTEM.md").write_text("System text.\n")
+    config = {"name": "A", "providerId": "p", "model": "m", "tools": [],
+              "instructions": "PROMPT.md", "systemPrompt": "SYSTEM.md"}
+    config_path = tmp_path / "agent-config.json"
+    config_path.write_text(json.dumps(config))
+    args = build_parser().parse_args(["update", "agent-uuid", "--config", str(config_path)])
+    payload = _native_payload(config, config_path, args)
+    assert payload["instructions"] == "Body text."
+    assert payload["systemPrompt"] == "System text."
