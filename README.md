@@ -77,6 +77,12 @@ overwrite existing files without `--force`, and warns before replacing a prompt 
 containing `{{template}}` variables — a snapshot holds rendered text and cannot recover
 a local template.
 
+Agent Studio's own templates ship prompts containing placeholders such as
+`{{INSERT_BRAND}}` and `{{INSERT_LANGUAGE}}`. A snapshot preserves them verbatim, since
+a native config is literal — fill them in by editing `PROMPT.md` and running `update`
+again. `--var` is rejected on a native config precisely so that an update cannot
+overwrite them.
+
 Note that a snapshot is a point-in-time copy. If someone edits the agent in the
 dashboard afterwards, applying an older snapshot reverts them; `--dry-run` shows exactly
 what would change before you commit to it.

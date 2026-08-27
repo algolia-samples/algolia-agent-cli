@@ -1742,3 +1742,48 @@ def test_native_read_strips_trailing_newline(tmp_path):
     payload = _native_payload(config, config_path, args)
     assert payload["instructions"] == "Body text."
     assert payload["systemPrompt"] == "System text."
+
+
+def test_native_preserves_agent_studio_template_placeholders(tmp_path):
+    """Agent Studio's own templates ship {{...}} placeholders in the stored prompt.
+
+    Verbatim text from the shopping-assistant template, including {{5}} — which is an
+    authoring slip in the template itself, and exactly why {{...}} cannot be assumed to
+    be a variable.
+    """
+    from algolia_agent.cli import _native_payload
+
+    body = (
+        "**AGENT ROLE**\n"
+        "You are the {{INSERT_BRAND}} Shopping Assistant for {{INSERT_INDUSTRY}}.\n"
+        "Language: reply in {{INSERT_LANGUAGE}} fallback to English.\n"
+        "SearchLimit: max {{5}} search_tool calls per session.\n"
+        "Prohibited: any mention of competitors {{INSERT_COMPETITORS_LIST}}.\n"
+    )
+    (tmp_path / "PROMPT.md").write_text(body)
+    config = {"name": "Shopping assistant", "providerId": "p", "model": "claude-fable-5",
+              "status": "published", "templateType": "shopping-assistant",
+              "instructions": "PROMPT.md", "tools": []}
+    config_path = tmp_path / "agent-config.json"
+    config_path.write_text(json.dumps(config))
+
+    args = build_parser().parse_args(["update", "agent-uuid", "--config", str(config_path)])
+    payload = _native_payload(config, config_path, args)
+    for marker in ("{{INSERT_BRAND}}", "{{INSERT_INDUSTRY}}", "{{INSERT_LANGUAGE}}",
+                   "{{5}}", "{{INSERT_COMPETITORS_LIST}}"):
+        assert marker in payload["instructions"], marker
+    assert payload["templateType"] == "shopping-assistant"
+
+
+def test_native_var_error_points_at_the_prompt_file(tmp_path):
+    from algolia_agent.cli import _native_payload
+
+    config = {"name": "A", "providerId": "p", "model": "m", "tools": [],
+              "instructions": "PROMPT.md"}
+    config_path = tmp_path / "agent-config.json"
+    config_path.write_text(json.dumps(config))
+    args = build_parser().parse_args(
+        ["update", "agent-uuid", "--config", str(config_path), "--var", "INSERT_BRAND=Acme"])
+    with pytest.raises(SystemExit) as exc:
+        _native_payload(config, config_path, args)
+    assert "edit PROMPT.md" in str(exc.value)

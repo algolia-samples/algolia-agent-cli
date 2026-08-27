@@ -658,9 +658,14 @@ def _native_payload(config: dict, config_path, args) -> dict:
     if getattr(args, "var", None):
         raise SystemExit(
             "ERROR: --var cannot be combined with a native config.\n"
-            "A native config is literal: it holds rendered server state, so {{...}} in a "
-            "prompt is content to preserve, not a variable to substitute.\n"
-            "Use the friendly config format (index/replicas) for templated agents."
+            "A native config is literal: it holds the prompt as the service stores it, so "
+            "{{...}} is content to preserve, not a variable to substitute. Agent Studio's\n"
+            "own templates ship placeholders like {{INSERT_BRAND}}, and substituting them\n"
+            "on every update would overwrite them.\n\n"
+            f"To fill them in, edit {config.get('instructions') or 'the prompt file'} "
+            "directly and run update again.\n"
+            "For templating across several agents, use the friendly config format "
+            "(index/replicas)."
         )
 
     def _read(field: str) -> str:
