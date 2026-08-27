@@ -620,18 +620,21 @@ def cmd_snapshot(client: AlgoliaAgentClient, args: argparse.Namespace):
     # unrecoverable — the template only ever existed locally and rendered text cannot be
     # un-rendered — so --force does not cover it. Overwriting a plain prompt is fine,
     # because a snapshot can reproduce it.
-    for p in existing:
-        if p.suffix.lower() != ".md":
+    prompt_targets = [(instr_path, "--instructions-file")]
+    if system_path:
+        prompt_targets.append((system_path, "--system-prompt-file"))
+    for path, flag in prompt_targets:
+        if not path.exists():
             continue
-        template_vars = extract_variables(p.read_text())
+        template_vars = extract_variables(path.read_text())
         if template_vars:
             listed = ", ".join("{{" + v + "}}" for v in sorted(template_vars))
             raise SystemExit(
-                f"ERROR: {p} contains template variables ({listed}) and cannot be\n"
+                f"ERROR: {path} contains template variables ({listed}) and cannot be\n"
                 "recovered from rendered server state.\n\n"
-                "Write the prompt elsewhere with:\n"
-                f"  --instructions-file {p.stem}.snapshot{p.suffix}\n"
-                f"or delete {p.name} first if you meant to replace it."
+                "Write it elsewhere with:\n"
+                f"  {flag} {path.stem}.snapshot{path.suffix}\n"
+                f"or delete {path.name} first if you meant to replace it."
             )
 
     snapshot = build_snapshot(agent, args.instructions_file,
@@ -728,11 +731,21 @@ def _create_from_native(client, args, file_config: dict, config_path):
 
     missing = [k for k in ("name", "providerId", "model") if not payload.get(k)]
     if missing:
-        raise SystemExit(
-            f"ERROR: native config is missing required fields: {', '.join(missing)}\n"
-            "A native config carries providerId directly rather than a provider name; "
-            "run `algolia-agent providers` to look one up."
-        )
+        hint = f"Add them to {config_path}" if config_path else "Add them to the config"
+        overridable = [k for k in missing if k in ("name", "model")]
+        if overridable:
+            flags = " or ".join(f"--{k}" for k in overridable)
+            hint += f", or pass {flags}"
+        lines = [
+            f"ERROR: native config is missing required fields: {', '.join(missing)}",
+            hint + ".",
+        ]
+        if "providerId" in missing:
+            lines.append(
+                "A native config carries providerId directly rather than a provider "
+                "name — run `algolia-agent providers` to look one up."
+            )
+        raise SystemExit("\n".join(lines))
 
     payload["status"] = "draft"
 
