@@ -72,10 +72,39 @@ That round-trip is worth running after any snapshot: it is a completeness check.
 dry-run means the file holds everything the service does, so editing one value and
 applying it changes only that value.
 
-`snapshot` also writes `SYSTEM.md` when the agent has a system prompt, refuses to
-overwrite existing files without `--force`, and warns before replacing a prompt file
-containing `{{template}}` variables — a snapshot holds rendered text and cannot recover
-a local template.
+`snapshot` also writes `SYSTEM.md` when the agent has a system prompt, and refuses to
+overwrite existing files without `--force`.
+
+A prompt file containing `{{template}}` variables is never overwritten, **not even with
+`--force`**: a snapshot holds rendered text, and a rendered prompt cannot be turned back
+into a template. Write beside it instead:
+
+```bash
+algolia-agent snapshot <agent_id> --instructions-file PROMPT.snapshot.md
+```
+
+Plain prompt files are overwritten by `--force` as normal, since a snapshot can
+reproduce them.
+
+### Cloning an agent
+
+Because `create` also accepts a native config, a snapshot is a complete clone source:
+
+```bash
+algolia-agent snapshot <source_id> -o clone/agent-config.json
+# edit the name in clone/agent-config.json
+algolia-agent create --config clone/agent-config.json
+```
+
+The copy carries everything the friendly format cannot express — extra tools, `mode`,
+`allowUnlistedIndices`, per-index `searchControls`, the full `config` block. Two
+differences by design: `status` is forced to `draft`, since creating from a snapshot of a
+live agent should not silently publish the copy, and a native config must carry
+`providerId` directly (there is no provider-name lookup on that path — use
+`algolia-agent providers` to find one).
+
+Snapshot each agent into its own directory. `PROMPT.md` is the default prompt filename,
+so two snapshots in one directory collide — `snapshot` refuses rather than overwriting.
 
 Agent Studio's own templates ship prompts containing placeholders such as
 `{{INSERT_BRAND}}` and `{{INSERT_LANGUAGE}}`. A snapshot preserves them verbatim, since

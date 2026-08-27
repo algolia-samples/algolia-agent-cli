@@ -1665,21 +1665,59 @@ def test_cmd_snapshot_writes_both_files_and_refuses_to_clobber(tmp_path, capsys)
     assert "refusing to overwrite" in str(exc.value)
 
 
-def test_cmd_snapshot_warns_before_replacing_a_templated_prompt(tmp_path, capsys):
-    """A local template cannot be recovered from rendered server state."""
+def test_cmd_snapshot_refuses_to_replace_a_templated_prompt_even_with_force(tmp_path):
+    """A local template cannot be recovered from rendered server state, so --force
+    does not cover it. Overwriting a plain prompt is fine — a snapshot reproduces it."""
     from algolia_agent.cli import cmd_snapshot
 
     mock_client = MagicMock()
     mock_client.get_agent.return_value = _server_agent()
     out = tmp_path / "agent-config.json"
     out.write_text("{}")
-    (tmp_path / "PROMPT.md").write_text("Hello {{event_name}} from {{booth}}.")
+    prompt = tmp_path / "PROMPT.md"
+    prompt.write_text("Hello {{event_name}} from {{booth}}.")
+
+    with pytest.raises(SystemExit) as exc:
+        cmd_snapshot(mock_client, build_parser().parse_args(
+            ["snapshot", "agent-uuid", "-o", str(out), "--force"]))
+    msg = str(exc.value)
+    assert "contains template variables" in msg
+    assert "{{event_name}}" in msg and "{{booth}}" in msg
+    assert "--instructions-file PROMPT.snapshot.md" in msg
+    assert "--system-prompt-file" not in msg
+    # The template is still on disk, untouched.
+    assert prompt.read_text() == "Hello {{event_name}} from {{booth}}."
+
+
+def test_cmd_snapshot_force_overwrites_a_plain_prompt(tmp_path):
+    from algolia_agent.cli import cmd_snapshot
+
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = _server_agent()
+    out = tmp_path / "agent-config.json"
+    out.write_text("{}")
+    (tmp_path / "PROMPT.md").write_text("No variables here.")
 
     cmd_snapshot(mock_client, build_parser().parse_args(
         ["snapshot", "agent-uuid", "-o", str(out), "--force"]))
-    err = capsys.readouterr().err
-    assert "contains template variables" in err
-    assert "PROMPT.md" in err
+    assert (tmp_path / "PROMPT.md").read_text() == "Line one.\nLine two.\n"
+
+
+def test_cmd_snapshot_templated_prompt_can_be_routed_elsewhere(tmp_path):
+    """The suggested remedy actually works: keep the template, write beside it."""
+    from algolia_agent.cli import cmd_snapshot
+
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = _server_agent()
+    out = tmp_path / "agent-config.json"
+    (tmp_path / "PROMPT.md").write_text("Hello {{event_name}}.")
+
+    cmd_snapshot(mock_client, build_parser().parse_args(
+        ["snapshot", "agent-uuid", "-o", str(out),
+         "--instructions-file", "PROMPT.snapshot.md"]))
+    assert (tmp_path / "PROMPT.md").read_text() == "Hello {{event_name}}."
+    assert (tmp_path / "PROMPT.snapshot.md").read_text() == "Line one.\nLine two.\n"
+    assert json.loads(out.read_text())["instructions"] == "PROMPT.snapshot.md"
 
 
 def test_cmd_snapshot_no_warning_for_a_plain_prompt(tmp_path, capsys):
@@ -1866,3 +1904,169 @@ def test_snapshot_overwrite_hint_names_the_real_flags(tmp_path):
     assert "-o/--output" in msg
     assert "--instructions-file" in msg
     assert "-o/--instructions-file" not in msg
+
+
+# ── native create (#14 phase 3) ───────────────────────────────────────────────
+
+def _native_create_config(tmp_path, **overrides):
+    (tmp_path / "PROMPT.md").write_text("You are the {{INSERT_BRAND}} assistant.\n")
+    config = {
+        "name": "Shopping assistant", "providerId": "provider-uuid",
+        "model": "claude-fable-5", "status": "published",
+        "templateType": "shopping-assistant", "instructions": "PROMPT.md",
+        "tools": [{"name": "algolia_search_index", "type": "algolia_search_index",
+                   "mode": "dynamic", "allowUnlistedIndices": True,
+                   "indices": [{"index": "products", "description": "Catalog.",
+                                "searchControls": {"distinct": {"exposed": True, "default": False}}}]},
+                  {"name": "algolia_display_results", "type": "algolia_display_results",
+                   "isTerminal": False, "maxGroups": 3}],
+        "config": {"suggestions": {"enabled": True}, "memory": {"enabled": True}},
+    }
+    config.update(overrides)
+    path = tmp_path / "agent-config.json"
+    path.write_text(json.dumps(config))
+    return path
+
+
+def test_create_from_native_sends_everything_and_forces_draft(tmp_path):
+    from algolia_agent.cli import cmd_create
+
+    path = _native_create_config(tmp_path)
+    mock_client = MagicMock()
+    mock_client.create_agent.return_value = {"id": "new-uuid", "name": "Shopping assistant",
+                                             "status": "draft"}
+    cmd_create(mock_client, build_parser().parse_args(["create", "--config", str(path)]))
+
+    payload = mock_client.create_agent.call_args.args[0]
+    # A snapshot of a live agent must not silently publish the copy.
+    assert payload["status"] == "draft"
+    # Everything the friendly format cannot express survives.
+    assert [t["type"] for t in payload["tools"]] == ["algolia_search_index",
+                                                     "algolia_display_results"]
+    assert payload["tools"][0]["mode"] == "dynamic"
+    assert payload["tools"][0]["allowUnlistedIndices"] is True
+    assert payload["tools"][0]["indices"][0]["searchControls"] is not None
+    assert sorted(payload["config"]) == ["memory", "suggestions"]
+    assert payload["templateType"] == "shopping-assistant"
+    assert payload["providerId"] == "provider-uuid"
+    # No provider-name resolution happens on this path.
+    mock_client.resolve_provider_id.assert_not_called()
+    # Literal, not rendered.
+    assert "{{INSERT_BRAND}}" in payload["instructions"]
+
+
+def test_create_from_native_requires_provider_id(tmp_path):
+    from algolia_agent.cli import cmd_create
+
+    path = _native_create_config(tmp_path, providerId=None)
+    with pytest.raises(SystemExit) as exc:
+        cmd_create(MagicMock(), build_parser().parse_args(["create", "--config", str(path)]))
+    msg = str(exc.value)
+    assert "providerId" in msg
+    assert "algolia-agent providers" in msg
+
+
+def test_create_from_native_dry_run_needs_no_client(tmp_path, capsys):
+    """_main calls cmd_create(None, args) for --dry-run, so this path must not use it."""
+    from algolia_agent.cli import cmd_create
+
+    path = _native_create_config(tmp_path)
+    cmd_create(None, build_parser().parse_args(
+        ["create", "--config", str(path), "--dry-run"]))
+    out = capsys.readouterr().out
+    assert "CREATE DRY RUN (native config)" in out
+    assert '"status": "draft"' in out
+    assert "algolia_display_results" in out
+
+
+def test_create_from_native_rejects_friendly_flags(tmp_path):
+    from algolia_agent.cli import cmd_create
+
+    path = _native_create_config(tmp_path)
+    for extra, expected in ([["--index", "p"], "--index"], [["--var", "INSERT_BRAND=x"], "--var"]):
+        with pytest.raises(SystemExit) as exc:
+            cmd_create(MagicMock(), build_parser().parse_args(
+                ["create", "--config", str(path)] + extra))
+        assert expected in str(exc.value)
+
+
+def test_create_friendly_path_unaffected(tmp_path):
+    """The friendly format must still resolve a provider name and build one tool."""
+    from algolia_agent.cli import cmd_create
+
+    (tmp_path / "PROMPT.md").write_text("Hello.")
+    path = tmp_path / "agent-config.json"
+    path.write_text(json.dumps({
+        "name": "Friendly", "provider": "hackathon-gemini", "model": "gemini-3.5-flash",
+        "instructions": "PROMPT.md", "index": "products",
+    }))
+    mock_client = MagicMock()
+    mock_client.resolve_provider_id.return_value = "provider-uuid"
+    mock_client.create_agent.return_value = {"id": "x", "name": "Friendly", "status": "draft"}
+    cmd_create(mock_client, build_parser().parse_args(["create", "--config", str(path)]))
+
+    mock_client.resolve_provider_id.assert_called_once_with("hackathon-gemini")
+    payload = mock_client.create_agent.call_args.args[0]
+    assert payload["providerId"] == "provider-uuid"
+    assert [t["type"] for t in payload["tools"]] == ["algolia_search_index"]
+
+
+def test_snapshot_templated_system_prompt_points_at_the_right_flag(tmp_path):
+    """When the templated file is SYSTEM.md, --instructions-file is the wrong remedy."""
+    from algolia_agent.cli import cmd_snapshot
+
+    agent = _server_agent()
+    agent["systemPrompt"] = "You are terse."
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = agent
+    out = tmp_path / "agent-config.json"
+    (tmp_path / "SYSTEM.md").write_text("Act as {{persona}}.")
+
+    with pytest.raises(SystemExit) as exc:
+        cmd_snapshot(mock_client, build_parser().parse_args(
+            ["snapshot", "agent-uuid", "-o", str(out), "--force"]))
+    msg = str(exc.value)
+    assert "SYSTEM.md" in msg
+    assert "{{persona}}" in msg
+    assert "--system-prompt-file SYSTEM.snapshot.md" in msg
+    assert "--instructions-file" not in msg
+
+
+def test_snapshot_detects_a_templated_prompt_with_a_non_md_name(tmp_path):
+    """--instructions-file PROMPT.txt is legal, so keying on the .md suffix missed it."""
+    from algolia_agent.cli import cmd_snapshot
+
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = _server_agent()
+    out = tmp_path / "agent-config.json"
+    (tmp_path / "PROMPT.txt").write_text("Hello {{event_name}}.")
+
+    with pytest.raises(SystemExit) as exc:
+        cmd_snapshot(mock_client, build_parser().parse_args(
+            ["snapshot", "agent-uuid", "-o", str(out),
+             "--instructions-file", "PROMPT.txt", "--force"]))
+    assert "--instructions-file PROMPT.snapshot.txt" in str(exc.value)
+
+
+def test_native_create_missing_name_does_not_mention_providers(tmp_path):
+    from algolia_agent.cli import cmd_create
+
+    path = _native_create_config(tmp_path, name=None)
+    with pytest.raises(SystemExit) as exc:
+        cmd_create(MagicMock(), build_parser().parse_args(["create", "--config", str(path)]))
+    msg = str(exc.value)
+    assert "name" in msg
+    assert "--name" in msg                      # actionable via a flag
+    assert "algolia-agent providers" not in msg  # irrelevant remedy
+    assert "providerId" not in msg
+
+
+def test_native_create_missing_provider_id_still_mentions_providers(tmp_path):
+    from algolia_agent.cli import cmd_create
+
+    path = _native_create_config(tmp_path, providerId=None)
+    with pytest.raises(SystemExit) as exc:
+        cmd_create(MagicMock(), build_parser().parse_args(["create", "--config", str(path)]))
+    msg = str(exc.value)
+    assert "providerId" in msg
+    assert "algolia-agent providers" in msg

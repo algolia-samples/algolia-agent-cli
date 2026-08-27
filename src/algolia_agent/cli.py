@@ -195,10 +195,24 @@ def cmd_providers(client: AlgoliaAgentClient, args: argparse.Namespace):
         print()
 
 
+def _report_created(agent: dict, args: argparse.Namespace):
+    if args.json:
+        print(json.dumps({"id": agent["id"], "name": agent["name"], "status": agent["status"]}))
+        return
+    print(f"Created agent: {agent['name']}")
+    print(f"Agent ID:      {agent['id']}")
+    print(f"Status:        {agent['status']}")
+    print(f"\nTo publish: algolia-agent publish {agent['id']}")
+
+
 def cmd_create(client: AlgoliaAgentClient, args: argparse.Namespace):
     # Load and merge config; auto-detect agent-config.json if --config not given
     config_path = args.config or (Path("agent-config.json") if Path("agent-config.json").exists() else None)
     file_config = load_config(config_path) if config_path else {}
+    if is_native_config(file_config):
+        _create_from_native(client, args, file_config, config_path)
+        return
+
     config = merge_config(file_config, args)
 
     # Auto-detect PROMPT.md if instructions not specified
@@ -272,16 +286,7 @@ def cmd_create(client: AlgoliaAgentClient, args: argparse.Namespace):
     if config.get("config"):
         payload["config"] = config["config"]
 
-    agent = client.create_agent(payload)
-
-    if args.json:
-        print(json.dumps({"id": agent["id"], "name": agent["name"], "status": agent["status"]}))
-        return
-
-    print(f"Created agent: {agent['name']}")
-    print(f"Agent ID:      {agent['id']}")
-    print(f"Status:        {agent['status']}")
-    print(f"\nTo publish: algolia-agent publish {agent['id']}")
+    _report_created(client.create_agent(payload), args)
 
 
 _MISSING = object()
@@ -611,15 +616,25 @@ def cmd_snapshot(client: AlgoliaAgentClient, args: argparse.Namespace):
         )
 
     # A snapshot holds rendered server state, so overwriting a templated prompt would
-    # replace {{placeholders}} with the values they resolved to — an unrecoverable loss,
-    # since the template only ever existed locally.
-    for p in existing:
-        if p.suffix.lower() == ".md" and extract_variables(p.read_text()):
-            print(
-                f"WARNING: {p} contains template variables and will be replaced with "
-                f"rendered text.\n         The template exists only locally; a snapshot "
-                f"cannot recover it.",
-                file=sys.stderr,
+    # replace {{placeholders}} with the values they resolved to. That loss is
+    # unrecoverable — the template only ever existed locally and rendered text cannot be
+    # un-rendered — so --force does not cover it. Overwriting a plain prompt is fine,
+    # because a snapshot can reproduce it.
+    prompt_targets = [(instr_path, "--instructions-file")]
+    if system_path:
+        prompt_targets.append((system_path, "--system-prompt-file"))
+    for path, flag in prompt_targets:
+        if not path.exists():
+            continue
+        template_vars = extract_variables(path.read_text())
+        if template_vars:
+            listed = ", ".join("{{" + v + "}}" for v in sorted(template_vars))
+            raise SystemExit(
+                f"ERROR: {path} contains template variables ({listed}) and cannot be\n"
+                "recovered from rendered server state.\n\n"
+                "Write it elsewhere with:\n"
+                f"  {flag} {path.stem}.snapshot{path.suffix}\n"
+                f"or delete {path.name} first if you meant to replace it."
             )
 
     snapshot = build_snapshot(agent, args.instructions_file,
@@ -669,7 +684,7 @@ def _native_payload(config: dict, config_path, args) -> dict:
             "own templates ship placeholders like {{INSERT_BRAND}}, and substituting them\n"
             "on every update would overwrite them.\n\n"
             f"To fill them in, edit {config.get('instructions') or 'the prompt file'} "
-            "directly and run update again.\n"
+            "directly and run the command again.\n"
             "For templating across several agents, use the friendly config format "
             "(index/replicas)."
         )
@@ -702,6 +717,47 @@ def _native_payload(config: dict, config_path, args) -> dict:
         if val is not None:
             payload[key] = val
     return payload
+
+
+def _create_from_native(client, args, file_config: dict, config_path):
+    """Create an agent from a native config — a snapshot, usually of another agent.
+
+    Unlike update there is no prior state to lose, so no guard is needed. The payload
+    is sent as the file describes it, with one exception: status is forced to draft.
+    Creating from a snapshot of a live agent should not silently publish the copy, and
+    `create` is documented as producing a draft.
+    """
+    payload = _native_payload(file_config, config_path, args)
+
+    missing = [k for k in ("name", "providerId", "model") if not payload.get(k)]
+    if missing:
+        hint = f"Add them to {config_path}" if config_path else "Add them to the config"
+        overridable = [k for k in missing if k in ("name", "model")]
+        if overridable:
+            flags = " or ".join(f"--{k}" for k in overridable)
+            hint += f", or pass {flags}"
+        lines = [
+            f"ERROR: native config is missing required fields: {', '.join(missing)}",
+            hint + ".",
+        ]
+        if "providerId" in missing:
+            lines.append(
+                "A native config carries providerId directly rather than a provider "
+                "name — run `algolia-agent providers` to look one up."
+            )
+        raise SystemExit("\n".join(lines))
+
+    payload["status"] = "draft"
+
+    if args.dry_run:
+        print("=== CREATE DRY RUN (native config) ===")
+        print(f"  Source: {config_path}")
+        print(f"  Tools:  {', '.join(t.get('type') or '?' for t in payload.get('tools') or []) or 'none'}")
+        print("\nPayload:")
+        print(json.dumps(payload, indent=2))
+        return
+
+    _report_created(client.create_agent(payload), args)
 
 
 def _apply_update(client, args, current: dict, new_payload: dict, config_path=None,
