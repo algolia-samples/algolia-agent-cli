@@ -91,6 +91,29 @@ def test_list_agents_follows_pagination(client):
     assert "page=2" in m.call_args_list[1].args[0].full_url
 
 
+def test_list_agents_first_request_carries_no_page_param(client):
+    """The first request must be identical to a plain _request(), so the helper is safe
+    on endpoints that may not accept a page parameter."""
+    page1 = [{"id": f"a{n}"} for n in range(10)]
+    responses = [
+        _mock_response({"data": page1, "pagination": {"totalPages": 2}}),
+        _mock_response({"data": [{"id": "b"}], "pagination": {"totalPages": 2}}),
+    ]
+    with patch("urllib.request.urlopen", side_effect=responses) as m:
+        client.list_agents()
+    first, second = (call.args[0].full_url for call in m.call_args_list)
+    assert first.endswith("/agents"), first
+    assert "page=" not in first
+    assert "page=2" in second
+
+
+def test_paginated_passes_through_a_bare_list(client):
+    """A bare-list response is returned as-is rather than crashing on .get('data')."""
+    models = ["gemini-2.5-flash", "gemini-3.5-flash"]
+    with patch("urllib.request.urlopen", return_value=_mock_response(models)):
+        assert client._paginated("/providers/x/models") == models
+
+
 def test_list_agents_single_page_makes_one_request(client):
     agents = [{"id": "abc"}]
     envelope = {"data": agents, "pagination": {"page": 1, "limit": 10, "totalCount": 1, "totalPages": 1}}

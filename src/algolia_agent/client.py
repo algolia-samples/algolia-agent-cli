@@ -101,21 +101,28 @@ class AlgoliaAgentClient:
                     continue
                 raise AgentAPIError(0, f"Request timed out after {_TIMEOUT}s") from None
 
-    def _paginated(self, path: str) -> list[dict]:
+    def _paginated(self, path: str) -> list:
         """Collect every page of a list endpoint.
 
         These endpoints wrap results as {"data": [...], "pagination": {...}} and cap a
         page at 10 items, so reading only the first response silently truncates — an
         account with 14 agents reported 10. Responses without a "pagination" block are
         treated as complete.
+
+        The first request goes to `path` untouched, so it is identical to a plain
+        _request() call; `page=` is only added when a second page is actually needed.
+        That keeps the helper safe on endpoints that may not accept the parameter.
+
+        Returns list[dict] for the paginated endpoints, but passes a bare-list response
+        straight through, hence the unparameterised annotation.
         """
-        items: list[dict] = []
+        items: list = []
         page = 1
         while True:
             sep = "&" if "?" in path else "?"
-            result = self._request(f"{path}{sep}page={page}")
+            result = self._request(path if page == 1 else f"{path}{sep}page={page}")
             if not isinstance(result, dict):
-                # Endpoint returns a bare list; nothing to page through.
+                # Endpoint returned a bare list; nothing to page through.
                 return result if isinstance(result, list) else items
             page_items = result.get("data", [])
             items += page_items
