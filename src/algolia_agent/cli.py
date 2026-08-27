@@ -21,6 +21,7 @@ from pathlib import Path
 
 from InquirerPy import inquirer
 
+from . import __version__
 from .client import AgentAPIError, AlgoliaAgentClient
 from .template import extract_variables, render
 
@@ -1180,6 +1181,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="algolia-agent",
         description="Algolia Agent Studio CLI",
     )
+    parser.add_argument("--version", action="version",
+                        version=f"algolia-agent {__version__}")
     parser.add_argument("--app-id", help="Algolia Application ID (overrides env/dotenv)")
     parser.add_argument("--api-key", help="Algolia API Key (overrides env/dotenv)")
 
