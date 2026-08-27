@@ -546,6 +546,12 @@ _SNAPSHOT_SKIP_TOP = {"id", "createdAt", "updatedAt", "lastUsedAt"}
 # frozen in a checked-in file would only go stale.
 _SNAPSHOT_SKIP_INDEX = {"enhancedDescription"}
 
+# templateType is carried through, but it is a provenance label rather than a selector:
+# the dashboard's template picker populates instructions and tools at creation time and
+# stamps which template was used. The field accepts any string (only the type is
+# validated) and setting it has no side effects, so editing it in a snapshot relabels the
+# agent without applying anything.
+
 
 def build_snapshot(agent: dict, instructions_file: str,
                    system_prompt_file: str | None = None) -> dict:
