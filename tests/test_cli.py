@@ -1331,3 +1331,150 @@ def test_diff_ignores_null_tool_fields_not_sent():
         "indices": [{"index": "products", "description": "d"}],
     }])
     assert not _diff(current, new_payload)
+
+
+# ── destructive-update guard (#14 phase 1) ────────────────────────────────────
+
+def _rich_current_agent():
+    """An agent carrying everything agent-config.json cannot express."""
+    return {
+        "id": "agent-uuid", "name": "Rich Agent", "model": "gemini-2.5-flash",
+        "instructions": "Old instructions.", "status": "published",
+        "providerId": "provider-uuid",
+        "tools": [
+            {"name": "algolia_search_index", "type": "algolia_search_index",
+             "mode": "dynamic", "allowUnlistedIndices": True,
+             "indices": [{"index": "products", "description": "Product catalog.",
+                          "searchControls": {"hitsPerPage": {"exposed": True, "default": 7}}}]},
+            {"name": "algolia_display_results", "type": "algolia_display_results",
+             "isTerminal": False, "maxGroups": 3},
+        ],
+        "config": {"suggestions": {"enabled": True}, "memory": {"enabled": True},
+                   "max_iterations": 15},
+    }
+
+
+def _narrow_payload():
+    """What build_tool() + cmd_update produce from a config naming only the index."""
+    return {
+        "name": "Rich Agent", "providerId": "provider-uuid", "model": "gemini-2.5-flash",
+        "instructions": "Old instructions.", "status": "published",
+        "tools": [{"name": "algolia_search_index", "type": "algolia_search_index",
+                   "indices": [{"index": "products", "description": "Product catalog."}]}],
+        "config": {"suggestions": {"enabled": True}},
+    }
+
+
+def test_removals_lists_every_loss_the_config_cannot_express():
+    from algolia_agent.cli import _removals
+
+    out = _removals(_rich_current_agent(), _narrow_payload())
+    joined = "\n".join(out)
+    assert "'algolia_display_results' tool would be deleted" in joined
+    assert "algolia_search_index.mode" in joined and "dynamic" in joined
+    assert "algolia_search_index.allowUnlistedIndices" in joined
+    assert "searchControls on 'products' would be wiped" in joined
+    assert "config key 'memory'" in joined
+    assert "config key 'max_iterations'" in joined
+    # 'suggestions' is being sent, so it is not a loss.
+    assert "'suggestions'" not in joined
+
+
+def test_removals_empty_for_a_faithful_payload():
+    from algolia_agent.cli import _removals
+
+    current = _rich_current_agent()
+    assert _removals(current, dict(current)) == []
+
+
+def test_removals_ignores_fields_already_at_their_default():
+    from algolia_agent.cli import _removals
+
+    current = _rich_current_agent()
+    current["tools"][0]["mode"] = "static"
+    current["tools"][0]["allowUnlistedIndices"] = False
+    out = "\n".join(_removals(current, _narrow_payload()))
+    assert "mode" not in out
+    assert "allowUnlistedIndices" not in out
+
+
+def test_removals_does_not_flag_index_membership():
+    """Dropping an index is expressible in config, so it is a choice, not an accident."""
+    from algolia_agent.cli import _removals
+
+    current = _rich_current_agent()
+    current["tools"][0]["indices"].append({"index": "products_asc", "description": "Asc."})
+    out = "\n".join(_removals(current, _narrow_payload()))
+    assert "products_asc" not in out
+
+
+def _guard_args(tmp_path, extra=None):
+    prompt = tmp_path / "PROMPT.md"
+    prompt.write_text("Old instructions.")
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({
+        "name": "Rich Agent", "model": "gemini-2.5-flash",
+        "instructions": str(prompt), "index": "products",
+        "index_description": "Product catalog.",
+        "config": {"suggestions": {"enabled": True}},
+    }))
+    return build_parser().parse_args(
+        ["update", "agent-uuid", "--config", str(config)] + (extra or [])
+    )
+
+
+def test_update_refuses_a_destructive_payload(tmp_path, capsys):
+    from algolia_agent.cli import cmd_update
+
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = _rich_current_agent()
+    with pytest.raises(SystemExit) as exc:
+        cmd_update(mock_client, _guard_args(tmp_path))
+    msg = str(exc.value)
+    assert "would remove configuration" in msg
+    assert "algolia_display_results" in msg
+    assert "--force" in msg
+    mock_client.update_agent.assert_not_called()
+
+
+def test_update_proceeds_with_force(tmp_path):
+    from algolia_agent.cli import cmd_update
+
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = _rich_current_agent()
+    mock_client.update_agent.return_value = {"id": "agent-uuid", "name": "Rich Agent", "status": "published"}
+    cmd_update(mock_client, _guard_args(tmp_path, ["--force"]))
+    mock_client.update_agent.assert_called_once()
+
+
+def test_dry_run_is_not_blocked_by_the_guard(tmp_path, capsys):
+    """--dry-run writes nothing, so it must still report rather than refuse."""
+    from algolia_agent.cli import cmd_update
+
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = _rich_current_agent()
+    cmd_update(mock_client, _guard_args(tmp_path, ["--dry-run"]))
+    out = capsys.readouterr().out
+    assert "DRY RUN" in out
+    assert "algolia_display_results" in out
+    mock_client.update_agent.assert_not_called()
+
+
+def test_update_allowed_when_nothing_is_removed(tmp_path):
+    """A plain agent with nothing extra must still be updatable without --force."""
+    from algolia_agent.cli import cmd_update
+
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = _make_current_agent()
+    mock_client.update_agent.return_value = {"id": "agent-uuid", "name": "Old Agent", "status": "draft"}
+    prompt = tmp_path / "PROMPT.md"
+    prompt.write_text("New instructions.")
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({
+        "name": "Old Agent", "model": "gemini-2.5-flash", "instructions": str(prompt),
+        "index": "products", "index_description": "Product catalog.",
+        "replicas": [{"index": "products_price_asc", "description": "Sorted by price ascending."}],
+    }))
+    args = build_parser().parse_args(["update", "agent-uuid", "--config", str(config)])
+    cmd_update(mock_client, args)
+    mock_client.update_agent.assert_called_once()
