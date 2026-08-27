@@ -1665,21 +1665,58 @@ def test_cmd_snapshot_writes_both_files_and_refuses_to_clobber(tmp_path, capsys)
     assert "refusing to overwrite" in str(exc.value)
 
 
-def test_cmd_snapshot_warns_before_replacing_a_templated_prompt(tmp_path, capsys):
-    """A local template cannot be recovered from rendered server state."""
+def test_cmd_snapshot_refuses_to_replace_a_templated_prompt_even_with_force(tmp_path):
+    """A local template cannot be recovered from rendered server state, so --force
+    does not cover it. Overwriting a plain prompt is fine — a snapshot reproduces it."""
     from algolia_agent.cli import cmd_snapshot
 
     mock_client = MagicMock()
     mock_client.get_agent.return_value = _server_agent()
     out = tmp_path / "agent-config.json"
     out.write_text("{}")
-    (tmp_path / "PROMPT.md").write_text("Hello {{event_name}} from {{booth}}.")
+    prompt = tmp_path / "PROMPT.md"
+    prompt.write_text("Hello {{event_name}} from {{booth}}.")
+
+    with pytest.raises(SystemExit) as exc:
+        cmd_snapshot(mock_client, build_parser().parse_args(
+            ["snapshot", "agent-uuid", "-o", str(out), "--force"]))
+    msg = str(exc.value)
+    assert "contains template variables" in msg
+    assert "{{event_name}}" in msg and "{{booth}}" in msg
+    assert "--instructions-file PROMPT.snapshot.md" in msg
+    # The template is still on disk, untouched.
+    assert prompt.read_text() == "Hello {{event_name}} from {{booth}}."
+
+
+def test_cmd_snapshot_force_overwrites_a_plain_prompt(tmp_path):
+    from algolia_agent.cli import cmd_snapshot
+
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = _server_agent()
+    out = tmp_path / "agent-config.json"
+    out.write_text("{}")
+    (tmp_path / "PROMPT.md").write_text("No variables here.")
 
     cmd_snapshot(mock_client, build_parser().parse_args(
         ["snapshot", "agent-uuid", "-o", str(out), "--force"]))
-    err = capsys.readouterr().err
-    assert "contains template variables" in err
-    assert "PROMPT.md" in err
+    assert (tmp_path / "PROMPT.md").read_text() == "Line one.\nLine two.\n"
+
+
+def test_cmd_snapshot_templated_prompt_can_be_routed_elsewhere(tmp_path):
+    """The suggested remedy actually works: keep the template, write beside it."""
+    from algolia_agent.cli import cmd_snapshot
+
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = _server_agent()
+    out = tmp_path / "agent-config.json"
+    (tmp_path / "PROMPT.md").write_text("Hello {{event_name}}.")
+
+    cmd_snapshot(mock_client, build_parser().parse_args(
+        ["snapshot", "agent-uuid", "-o", str(out),
+         "--instructions-file", "PROMPT.snapshot.md"]))
+    assert (tmp_path / "PROMPT.md").read_text() == "Hello {{event_name}}."
+    assert (tmp_path / "PROMPT.snapshot.md").read_text() == "Line one.\nLine two.\n"
+    assert json.loads(out.read_text())["instructions"] == "PROMPT.snapshot.md"
 
 
 def test_cmd_snapshot_no_warning_for_a_plain_prompt(tmp_path, capsys):

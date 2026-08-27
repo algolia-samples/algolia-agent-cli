@@ -72,10 +72,19 @@ That round-trip is worth running after any snapshot: it is a completeness check.
 dry-run means the file holds everything the service does, so editing one value and
 applying it changes only that value.
 
-`snapshot` also writes `SYSTEM.md` when the agent has a system prompt, refuses to
-overwrite existing files without `--force`, and warns before replacing a prompt file
-containing `{{template}}` variables — a snapshot holds rendered text and cannot recover
-a local template.
+`snapshot` also writes `SYSTEM.md` when the agent has a system prompt, and refuses to
+overwrite existing files without `--force`.
+
+A prompt file containing `{{template}}` variables is never overwritten, **not even with
+`--force`**: a snapshot holds rendered text, and a rendered prompt cannot be turned back
+into a template. Write beside it instead:
+
+```bash
+algolia-agent snapshot <agent_id> --instructions-file PROMPT.snapshot.md
+```
+
+Plain prompt files are overwritten by `--force` as normal, since a snapshot can
+reproduce them.
 
 ### Cloning an agent
 

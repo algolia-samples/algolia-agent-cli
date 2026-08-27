@@ -616,15 +616,22 @@ def cmd_snapshot(client: AlgoliaAgentClient, args: argparse.Namespace):
         )
 
     # A snapshot holds rendered server state, so overwriting a templated prompt would
-    # replace {{placeholders}} with the values they resolved to — an unrecoverable loss,
-    # since the template only ever existed locally.
+    # replace {{placeholders}} with the values they resolved to. That loss is
+    # unrecoverable — the template only ever existed locally and rendered text cannot be
+    # un-rendered — so --force does not cover it. Overwriting a plain prompt is fine,
+    # because a snapshot can reproduce it.
     for p in existing:
-        if p.suffix.lower() == ".md" and extract_variables(p.read_text()):
-            print(
-                f"WARNING: {p} contains template variables and will be replaced with "
-                f"rendered text.\n         The template exists only locally; a snapshot "
-                f"cannot recover it.",
-                file=sys.stderr,
+        if p.suffix.lower() != ".md":
+            continue
+        template_vars = extract_variables(p.read_text())
+        if template_vars:
+            listed = ", ".join("{{" + v + "}}" for v in sorted(template_vars))
+            raise SystemExit(
+                f"ERROR: {p} contains template variables ({listed}) and cannot be\n"
+                "recovered from rendered server state.\n\n"
+                "Write the prompt elsewhere with:\n"
+                f"  --instructions-file {p.stem}.snapshot{p.suffix}\n"
+                f"or delete {p.name} first if you meant to replace it."
             )
 
     snapshot = build_snapshot(agent, args.instructions_file,
