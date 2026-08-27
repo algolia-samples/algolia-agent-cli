@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "algolia-agent"
-version = "0.1.0"
+dynamic = ["version"]
 description = "CLI for Algolia Agent Studio"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -22,6 +22,9 @@ dev = ["pytest>=7"]
 
 [project.scripts]
 algolia-agent = "algolia_agent.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "algolia_agent.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

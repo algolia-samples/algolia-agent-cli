@@ -40,6 +40,21 @@ algolia-agent delete <agent_id> --confirm
 ```
 
 Add `--json` to any command except `init` for machine-readable output.
+`algolia-agent --version` reports the installed version.
+
+## Releasing
+
+`src/algolia_agent/__init__.py` holds `__version__` and everything derives from it:
+`pyproject.toml` reads it via `[tool.setuptools.dynamic]`, `--version` reports it, and
+the client sends it in the `User-Agent`. To cut a release, bump that one value, merge,
+then tag from `main`:
+
+```bash
+git checkout main && git pull
+git tag vX.Y.Z && git push origin vX.Y.Z
+```
+
+CI fails the tag build if the tag and `__version__` disagree.
 
 ## Config formats
 

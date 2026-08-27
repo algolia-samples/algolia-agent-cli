@@ -19,6 +19,11 @@ _MAX_RETRIES = 3       # attempts total (1 initial + 2 retries)
 _RETRY_BACKOFF = 1.0   # seconds; doubles each retry
 
 
+from . import __version__
+
+_USER_AGENT = f"algolia-agent-cli/{__version__}"
+
+
 def _load_dotenv(path: Path) -> dict[str, str]:
     """Parse a .env file and return key/value pairs. Ignores comments and blank lines."""
     result = {}
@@ -66,7 +71,7 @@ class AlgoliaAgentClient:
         req.add_header("x-algolia-api-key", self.api_key)
         req.add_header("Content-Type", "application/json")
         req.add_header("Accept", "application/json")
-        req.add_header("User-Agent", "algolia-agent-cli/0.1.0")
+        req.add_header("User-Agent", _USER_AGENT)
         delay = _RETRY_BACKOFF
         for attempt in range(_MAX_RETRIES):
             try:
@@ -151,7 +156,7 @@ class AlgoliaAgentClient:
         req.add_header("x-algolia-application-id", self.app_id)
         req.add_header("x-algolia-api-key", self.api_key)
         req.add_header("Accept", "application/json")
-        req.add_header("User-Agent", "algolia-agent-cli/0.1.0")
+        req.add_header("User-Agent", _USER_AGENT)
         try:
             with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
                 result = json.loads(resp.read())

@@ -384,3 +384,38 @@ def test_timeout_error_retries_then_succeeds(client):
         with patch("time.sleep"):
             result = client.get_agent("abc")
     assert result == agent
+
+
+# ── version reporting ─────────────────────────────────────────────────────────
+
+def test_user_agent_reports_the_package_version():
+    """The User-Agent was frozen at 0.1.0 through three tagged releases."""
+    import re
+
+    import algolia_agent
+    from algolia_agent.client import _USER_AGENT
+
+    assert re.fullmatch(r"\d+\.\d+\.\d+", algolia_agent.__version__), algolia_agent.__version__
+    assert _USER_AGENT == f"algolia-agent-cli/{algolia_agent.__version__}"
+
+
+def test_user_agent_header_is_actually_sent(client):
+    import algolia_agent
+
+    with patch("urllib.request.urlopen", return_value=_mock_response({"data": []})) as m:
+        client.list_agents()
+    req = m.call_args.args[0]
+    assert req.get_header("User-agent") == f"algolia-agent-cli/{algolia_agent.__version__}"
+
+
+def test_installed_metadata_matches_dunder_version():
+    """pyproject reads the version from the package, so these cannot diverge."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    import algolia_agent
+
+    try:
+        installed = version("algolia-agent")
+    except PackageNotFoundError:
+        pytest.skip("package not installed")
+    assert installed == algolia_agent.__version__
