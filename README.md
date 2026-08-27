@@ -209,17 +209,32 @@ and the instructions file in a single pass — missing vars are reported togethe
 }
 ```
 
-`searchControls` constrains what the LLM can do at query time. It is applied to every index (primary + replicas). Supported fields:
+`searchControls` constrains what the LLM can do at query time. In this friendly format
+one block is applied to **every** index (primary + replicas); the service itself stores
+them per index, so a native config from `snapshot` can differ index by index.
 
-| Field | What it does |
-|---|---|
-| `hitsPerPage` | Limit result count. Set `constraint.max` to cap it. |
-| `page` | Limit pagination depth. Set `constraint.max` to cap it. |
-| `attributesToRetrieve` | Restrict which attributes are returned in each hit. Useful for limiting the LLM payload to only the fields it needs. |
-| `facets` | Control which facet attributes are returned in the response. |
-| `responseFields` | Restrict which top-level response fields are returned. |
+Set `exposed: true` to let the LLM vary the value within its constraint; `exposed: false`
+to fix it.
 
-Set `exposed: true` to let the LLM vary the value within the constraint; `exposed: false` to fix it.
+The parameters do **not** share one shape — `constraint` appears only on the numeric
+ones, `merge` only on the list-valued ones:
+
+| Parameter | Sub-fields | What it does |
+|---|---|---|
+| `hitsPerPage` | `exposed`, `default`, `constraint: {min, max}` | Limit result count. Set `constraint.max` to cap it. |
+| `page` | `exposed`, `default`, `constraint: {min, max}` | Limit pagination depth. |
+| `attributesToRetrieve` | `exposed`, `default: []`, `constraint`, `merge` | Restrict which attributes each hit returns — useful for trimming the LLM payload. |
+| `responseFields` | `exposed`, `default: []`, `constraint`, `merge` | Restrict which top-level response fields are returned. |
+| `distinct` | `exposed`, `default` (boolean) | De-duplicate results. No `constraint`. |
+| `facets` | `exposed`, `default: []` | Control which facet attributes the response returns. No `constraint`. |
+| `query` | — | Present in the API's representation but not observed carrying a value. |
+| `custom` | — | Present in the API's representation but not observed carrying a value. |
+
+This table was derived by inspecting live agents rather than from a published schema, so
+treat `query`, `custom` and the semantics of `merge` as unconfirmed. The service returns
+all eight keys with `null` for anything unset, and it expands the ones you do send with
+its own defaults — which is why `--dry-run` compares only the keys your config actually
+specifies.
 
 ```bash
 algolia-agent create \
