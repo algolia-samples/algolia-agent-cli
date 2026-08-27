@@ -1573,8 +1573,7 @@ def test_build_snapshot_externalises_system_prompt_only_when_present():
     from algolia_agent.cli import build_snapshot
 
     agent = _server_agent()
-    assert "systemPrompt" not in build_snapshot(agent, "PROMPT.md", "SYSTEM.md") or \
-        build_snapshot(agent, "PROMPT.md", "SYSTEM.md")["systemPrompt"] is None
+    assert "systemPrompt" not in build_snapshot(agent, "PROMPT.md", "SYSTEM.md")
 
     agent["systemPrompt"] = "You are terse."
     snap = build_snapshot(agent, "PROMPT.md", "SYSTEM.md")
@@ -1787,3 +1786,83 @@ def test_native_var_error_points_at_the_prompt_file(tmp_path):
     with pytest.raises(SystemExit) as exc:
         _native_payload(config, config_path, args)
     assert "edit PROMPT.md" in str(exc.value)
+
+
+def test_build_snapshot_never_leaks_raw_system_prompt_text(tmp_path):
+    """A snapshot's systemPrompt is a path or absent, never the prompt text itself.
+
+    A whitespace-only value made cmd_snapshot skip writing SYSTEM.md while the snapshot
+    kept the raw string, which _native_payload then treated as a filename — producing a
+    snapshot that could not be applied.
+    """
+    from algolia_agent.cli import build_snapshot, _native_payload
+
+    agent = {"name": "A", "providerId": "p", "model": "m", "status": "draft",
+             "instructions": "x", "systemPrompt": "   ", "tools": []}
+    snap = build_snapshot(agent, "PROMPT.md", None)
+    assert "systemPrompt" not in snap
+
+    # And the resulting config applies cleanly rather than looking for a file named "   ".
+    (tmp_path / "PROMPT.md").write_text("x")
+    config_path = tmp_path / "agent-config.json"
+    config_path.write_text(json.dumps(snap))
+    args = build_parser().parse_args(["update", "a", "--config", str(config_path)])
+    payload = _native_payload(snap, config_path, args)
+    assert "systemPrompt" not in payload
+
+
+def test_build_snapshot_drops_system_prompt_when_not_externalised():
+    """Without a target filename there is nowhere to put the text, so drop the field.
+
+    Safe because the API preserves systemPrompt when the payload omits it.
+    """
+    from algolia_agent.cli import build_snapshot
+
+    agent = {"name": "A", "providerId": "p", "model": "m", "instructions": "x",
+             "systemPrompt": "You are terse.", "tools": []}
+    assert "systemPrompt" not in build_snapshot(agent, "PROMPT.md", None)
+
+
+def test_native_refusal_does_not_claim_the_format_cannot_express(tmp_path):
+    """A native config can express everything, so absence is an edit, not a limitation."""
+    from algolia_agent.cli import cmd_update
+
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = _rich_current_agent()
+    (tmp_path / "PROMPT.md").write_text("Old instructions.")
+    config = tmp_path / "native.json"
+    # A native config that has dropped the display-results tool and two config keys.
+    config.write_text(json.dumps({
+        "name": "Rich Agent", "providerId": "provider-uuid", "model": "gemini-2.5-flash",
+        "status": "published", "instructions": "PROMPT.md",
+        "tools": [{"name": "algolia_search_index", "type": "algolia_search_index",
+                   "mode": "dynamic", "allowUnlistedIndices": True,
+                   "indices": [{"index": "products", "description": "Product catalog.",
+                                "searchControls": {"hitsPerPage": {"exposed": True, "default": 7}}}]}],
+        "config": {"suggestions": {"enabled": True}},
+    }))
+    args = build_parser().parse_args(["update", "agent-uuid", "--config", str(config)])
+    with pytest.raises(SystemExit) as exc:
+        cmd_update(mock_client, args)
+    msg = str(exc.value)
+    assert "cannot express" not in msg
+    assert "not present in" in msg
+    assert "native.json" in msg          # finding 3: the file is named
+    assert "--force" in msg
+    mock_client.update_agent.assert_not_called()
+
+
+def test_snapshot_overwrite_hint_names_the_real_flags(tmp_path):
+    from algolia_agent.cli import cmd_snapshot
+
+    mock_client = MagicMock()
+    mock_client.get_agent.return_value = _server_agent()
+    out = tmp_path / "agent-config.json"
+    out.write_text("{}")
+    with pytest.raises(SystemExit) as exc:
+        cmd_snapshot(mock_client, build_parser().parse_args(
+            ["snapshot", "agent-uuid", "-o", str(out)]))
+    msg = str(exc.value)
+    assert "-o/--output" in msg
+    assert "--instructions-file" in msg
+    assert "-o/--instructions-file" not in msg

@@ -567,6 +567,11 @@ def build_snapshot(agent: dict, instructions_file: str,
     """
     snap = {k: v for k, v in agent.items() if k not in _SNAPSHOT_SKIP_TOP}
     snap["instructions"] = instructions_file
+    # systemPrompt is either a path or absent — never the raw text. Leaving the stored
+    # value in place would have it read back as a filename; a whitespace-only prompt did
+    # exactly that, producing a snapshot that could not be applied. Dropping it is safe
+    # because the API preserves systemPrompt when the payload omits it.
+    snap.pop("systemPrompt", None)
     if system_prompt_file and (agent.get("systemPrompt") or "").strip():
         snap["systemPrompt"] = system_prompt_file
     if isinstance(snap.get("tools"), list):
@@ -601,7 +606,8 @@ def cmd_snapshot(client: AlgoliaAgentClient, args: argparse.Namespace):
         raise SystemExit(
             "ERROR: refusing to overwrite:\n"
             + "\n".join(f"  {p}" for p in existing)
-            + "\nPass --force to overwrite, or -o/--instructions-file to write elsewhere."
+            + "\nPass --force to overwrite, or write elsewhere with -o/--output (config),\n"
+            "--instructions-file, or --system-prompt-file."
         )
 
     # A snapshot holds rendered server state, so overwriting a templated prompt would
@@ -698,7 +704,8 @@ def _native_payload(config: dict, config_path, args) -> dict:
     return payload
 
 
-def _apply_update(client, args, current: dict, new_payload: dict, config_path=None):
+def _apply_update(client, args, current: dict, new_payload: dict, config_path=None,
+                  native: bool = False):
     """Dry-run, guard, send. Shared by the friendly and native config paths so both
     get the same reporting and the same refusal."""
     if args.dry_run:
@@ -717,14 +724,24 @@ def _apply_update(client, args, current: dict, new_payload: dict, config_path=No
     removals = _removals(current, new_payload)
     if removals and not getattr(args, "force", False):
         source = f"{config_path}" if config_path else "the fields you supplied"
+        if native:
+            # A native config can express every one of these, so their absence is an
+            # edit to the file — possibly a deliberate one. Say what is missing rather
+            # than blaming the format.
+            why = f"They are not present in {source}.\n\n" \
+                  "If you meant to remove them, pass --force. Otherwise restore them —\n" \
+                  f"algolia-agent snapshot {args.agent_id} --force rewrites the file from\n" \
+                  "the agent's current state."
+        else:
+            why = f"{source} cannot express them, which is why they are absent.\n\n" \
+                  f"Take a full snapshot to keep them: algolia-agent snapshot {args.agent_id}\n" \
+                  "Or pass --force to accept the removals."
         raise SystemExit(
             "ERROR: this update would remove configuration the agent currently has:\n"
             + "\n".join(removals)
             + "\n\nThe Agent Studio API replaces these fields instead of merging them, so\n"
-            f"anything missing from the payload is lost. {source} cannot express them,\n"
-            "which is why they are absent.\n\n"
-            f"Take a full snapshot to keep them: algolia-agent snapshot {args.agent_id}\n"
-            "Or pass --force to accept the removals. Add --dry-run to see the full diff."
+            f"anything missing from the payload is lost. {why}\n"
+            "Add --dry-run to see the full diff."
         )
 
     agent = client.update_agent(args.agent_id, new_payload)
@@ -754,7 +771,7 @@ def cmd_update(client: AlgoliaAgentClient, args: argparse.Namespace):
 
     if is_native_config(file_config):
         new_payload = _native_payload(file_config, config_path, args)
-        _apply_update(client, args, current, new_payload)
+        _apply_update(client, args, current, new_payload, config_path, native=True)
         return
 
     config = merge_config(file_config, args)
